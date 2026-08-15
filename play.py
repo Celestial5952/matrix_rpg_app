@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Offline playtest REPL — the same core the Matrix adapter will drive.
+
+    python3 play.py
+
+Use this to balance combat. Restarting a bot and typing into Element to test a
+damage tweak is how these projects die.
+"""
+
+from __future__ import annotations
+
+import sys
+
+from core.game import handle, roll_board
+from core.state import Player
+
+
+def main() -> int:
+    player = Player(mxid="@you:local", name="Playtester")
+    roll_board(player)
+
+    print("=== Guild Hall (offline playtest) ===")
+    print("Type `help`, `board`, `accept 1`. Ctrl-D to quit.\n")
+    for line in handle(player, "board") or []:
+        print(line)
+
+    while True:
+        try:
+            text = input("\n> ")
+        except (EOFError, KeyboardInterrupt):
+            print("\nSee you.")
+            return 0
+
+        reply = handle(player, text)
+        if reply is None:
+            print("_(not a command — the bot would stay silent here)_")
+            continue
+        print()
+        for line in reply:
+            print(line)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

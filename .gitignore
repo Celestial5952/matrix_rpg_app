@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# bot credentials + local state — never commit
+*.db
+*.sqlite3
+credentials.json
+config.toml
+.env
+store/
