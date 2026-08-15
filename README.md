@@ -8,13 +8,30 @@ Matrix rather than Discord.
 
 ## Status
 
-Playable offline core. **No Matrix adapter yet.**
+Playable offline core, plus a working Matrix adapter.
 
 ```bash
 python3 play.py
 ```
 
-No dependencies — standard library only.
+`core/` has no dependencies — standard library only. The Matrix adapter
+(`adapters/matrix.py`) needs `matrix-nio`:
+
+```bash
+pip install -r requirements.txt
+
+export MATRIX_HOMESERVER=https://matrix.example.org
+export MATRIX_USER=@guildbot:example.org
+export MATRIX_PASSWORD=...        # or MATRIX_TOKEN=... for an existing access token
+export MATRIX_ROOM_ID='!abc123:example.org'
+
+python3 -m adapters.matrix
+```
+
+Player meta-state (renown, gold, rank, deaths) and the sync token persist to
+`MATRIX_STATE_DIR` (default `store/`, already gitignored). An in-progress
+fight is not persisted — restart mid-encounter and that one run is lost, same
+as a `flee`.
 
 ## Design decisions already settled
 
@@ -44,13 +61,11 @@ core/
   content.py   monsters + quests — the file meant to grow to thousands of lines
   combat.py    turn resolution, damage, telegraphed monster moves
   game.py      command routing + guild hall state machine
+  persist.py   JSON persistence for Player meta-state
 play.py        offline playtest REPL
-```
-
-The adapter, when it exists, should be the only file that knows Matrix exists:
-
-```
-adapters/matrix.py    sync loop, event -> handle(), lines -> m.room.message
+adapters/
+  matrix.py    sync loop, event -> handle(), lines -> m.room.message — the
+               only file that knows Matrix exists
 ```
 
 ## Combat model
@@ -74,19 +89,23 @@ client; a 40-node skill constellation does not.
 
 ## Known gaps
 
-- No Matrix adapter
-- No persistence — state is in-memory only, dies with the process
 - No tests
+- Persistence covers Player meta-state only — an in-progress run doesn't
+  survive a restart
 - Balance is first-draft and unplaytested beyond a few fights
+- The adapter's markdown → HTML rendering only understands `**bold**`,
+  `_italic_`, `` `code` `` — enough for current game text, not a general
+  renderer
 
-## Matrix gotchas to handle when writing the adapter
+## Matrix gotchas the adapter handles
 
-- **Backfill replay on restart** — bot syncs, receives history, re-executes every
-  `!accept` from the last three days. Persist the sync token; ignore events older
-  than startup.
-- **Ignore your own events**, or bot output containing command-shaped strings
-  loops.
-- **Key everything on MXID**, never display name — display names are mutable and
-  non-unique.
-- **Rate limits** — Tuwunel will throttle a chatty bot. Raise limits for the bot
-  user rather than adding sleeps.
+- **Backfill replay on restart** — the sync token persists to
+  `MATRIX_STATE_DIR/sync_token`; a cold start (no token) also drops any event
+  older than process startup, so a page of room history on first sync doesn't
+  replay every `!accept` from the last three days.
+- **Ignore your own events** — `adapters/matrix.py` skips anything sent by the
+  bot's own MXID, so command-shaped bot output can't loop.
+- **Key everything on MXID**, never display name — `Player` is keyed and
+  persisted by MXID; display name is cosmetic only.
+- **Rate limits** — Tuwunel will throttle a chatty bot. Raise limits for the
+  bot user rather than adding sleeps; the adapter doesn't add any.
