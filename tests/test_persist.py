@@ -34,6 +34,14 @@ def test_round_trip(tmp_path):
     assert loaded.character.abilities == player.character.abilities
 
 
+def test_portal_count_survives(tmp_path):
+    path = tmp_path / "players.json"
+    player = make_char()
+    player.character.portals_used = 6
+    save_all(path, {player.mxid: player})
+    assert load_all(path)[player.mxid].character.portals_used == 6
+
+
 def test_graveyard_survives(tmp_path):
     path = tmp_path / "players.json"
     player = make_player()

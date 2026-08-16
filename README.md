@@ -196,6 +196,18 @@ The kit self-heals on load: an entry naming an ability that is unknown, locked,
 or in the wrong slot silently falls back to the class default rather than
 raising. A save written before a rename must not brick the character.
 
+## Bailing out
+
+`!portal` (also `!tp`, `!escape`, `!flee`) abandons a contract instantly. No
+gold, no renown, no loot — you keep your character and nothing else.
+
+There is no mechanical penalty and there should not be one: the point of an
+escape hatch is that it is always available when a fight has gone wrong. The
+cost is social. `Character.portals_used` counts every bail, the guild clerk
+reads it, and she escalates from sympathetic to keeping a column with your name
+on it. Nothing else in the game reads that counter, and it dies with the
+character like everything else.
+
 ## Items, gold and loot
 
 `!shop` sells consumables, `!buy <n>` purchases them, `!inventory` (or `!bag`)

@@ -122,7 +122,7 @@ def test_nothing_works_before_a_character_exists():
 def test_help_lists_commands_in_every_state():
     """A player who cannot see a command cannot learn it exists."""
     expected = ("!create", "!board", "!accept", "!status", "!inventory",
-                "!shop", "!buy", "!use", "!flee", "!graveyard", "!help")
+                "!shop", "!buy", "!use", "!portal", "!graveyard", "!help")
 
     # no character
     player = make_player()
@@ -347,6 +347,73 @@ def test_ability_names_match_menu_numbers():
             assert _resolve_ability(char, str(i)) is ab, f"{cls} slot {i}"
             assert _resolve_ability(char, first_word) is ab, f"{cls} {first_word}"
             assert _resolve_ability(char, ab.key) is ab, f"{cls} {ab.key}"
+
+
+def test_portal_abandons_the_run_and_pays_nothing():
+    player = make_char()
+    char = player.character
+    char.gold, char.renown = 40, 10
+    handle(player, "!board")
+    handle(player, "!accept 1")
+
+    reply = handle(player, "!portal")
+    assert char.run is None
+    assert player.character is not None, "bailing out must not kill the character"
+    assert (char.gold, char.renown) == (40, 10), "no rewards for leaving"
+    assert char.inventory == {}
+    assert "abandoned" in " ".join(reply)
+
+
+def test_portal_is_counted_and_the_clerk_escalates():
+    """The counter is the joke; nothing mechanical reads it."""
+    player = make_char()
+    char = player.character
+    seen = set()
+    for expected in range(1, 10):
+        handle(player, "!board")
+        handle(player, "!accept 1")
+        reply = handle(player, "!portal")
+        assert char.portals_used == expected
+        seen.add("\n".join(reply))
+    assert len(seen) > 3, "the clerk should not repeat herself constantly"
+
+
+def test_portal_aliases_all_work():
+    for word in ("portal", "townportal", "tp", "escape", "flee", "run"):
+        player = make_char(mxid=f"@{word}:srv")
+        handle(player, "!board")
+        handle(player, "!accept 1")
+        assert handle(player, f"!{word}") is not None
+        assert player.character.run is None, word
+
+
+def test_portal_in_the_hall_is_a_joke_not_an_error():
+    player = make_char()
+    reply = handle(player, "!portal")
+    assert reply is not None
+    assert "already were" in " ".join(reply)
+    assert player.character.portals_used == 0, "a no-op must not count"
+
+
+def test_portals_die_with_the_character():
+    player = make_char()
+    handle(player, "!board")
+    handle(player, "!accept 1")
+    handle(player, "!portal")
+    assert player.character.portals_used == 1
+
+    for _ in range(80):
+        if player.character is None:
+            break
+        if player.character.run is None:
+            handle(player, "!board")
+            handle(player, "!accept 1")
+        player.character.run.hp = 1
+        handle(player, "!1")
+
+    handle(player, "!create"); handle(player, "!Next")
+    handle(player, "!human"); handle(player, "!fighter")
+    assert player.character.portals_used == 0
 
 
 def test_flee_abandons_the_run():

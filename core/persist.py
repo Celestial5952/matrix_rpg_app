@@ -35,6 +35,7 @@ _CHARACTER_FIELDS: dict[str, object] = {
     "renown": 0,
     "gold": 0,
     "runs_completed": 0,
+    "portals_used": 0,
     "created_at": 0.0,
     "inventory": None,  # None -> {}; see _inventory_from
     "loadout": None,    # None -> {}; see _loadout_from

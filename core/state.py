@@ -273,6 +273,8 @@ class Character:
     renown: int = 0
     gold: int = 0
     runs_completed: int = 0
+    # How many times you've bailed. The clerk keeps score; nothing else does.
+    portals_used: int = 0
     # item key -> count. Dies with the character, like everything else.
     inventory: dict[str, int] = field(default_factory=dict)
     # slot -> ability key. Empty means "use the class defaults".

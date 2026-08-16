@@ -70,6 +70,54 @@ CLASS_ICONS = {"fighter": "🗡️", "wizard": "🪄", "rogue": "🗝️", "cler
                "ranger": "🏹"}
 MODIFIER_ICON = "⚠️"
 
+# The clerk keeps score. Tiers by how many times this character has bailed —
+# she starts sympathetic and does not stay that way.
+PORTAL_TAUNTS: dict[str, tuple[str, ...]] = {
+    "first": (
+        "_'Oh, back so soon!'_ she says kindly. _'Nobody minds. Nobody at all.'_",
+        "_'Home safe!'_ she beams. _'That's the important thing. Allegedly.'_",
+        "_'A tactical withdrawal,'_ she agrees, writing **ran away** in the ledger.",
+    ),
+    "few": (
+        "_'Ah,'_ she says. _'The portal again. Warm in here, isn't it.'_",
+        "_'Do you know,'_ she muses, _'you're very good at the leaving part.'_",
+        "_'I've stopped writing the contract name,'_ she says. _'I just write "
+        "**left**.'_",
+        "_'Bramblewick owes me a copper,'_ she says, not explaining.",
+    ),
+    "many": (
+        "_She has your portal arrival written down before you finish "
+        "materialising._ _'Efficient!'_",
+        "_'I've given you your own column,'_ she says, showing you. It is a "
+        "long column.",
+        "_'The wolves have started calling it your song,'_ she says. "
+        "_'That shimmering noise. Very distinctive.'_",
+        "_'One day,'_ she says fondly, _'you'll come back with the dog.'_",
+    ),
+    "legendary": (
+        "_She rings a small bell. Somewhere in the hall, someone groans and "
+        "hands over money._",
+        "_'The guild has named a manoeuvre after you,'_ she says. _'It's not "
+        "a compliment, but it is an honour.'_",
+        "_'Bards have been asking about you,'_ she says. _'I've told them "
+        "everything.'_",
+        "_'Would you like the portal moved closer to the door?'_ she asks. "
+        "_'Save you the walk.'_",
+    ),
+}
+
+
+def _portal_taunt(count: int) -> str:
+    if count <= 1:
+        tier = "first"
+    elif count <= 3:
+        tier = "few"
+    elif count <= 7:
+        tier = "many"
+    else:
+        tier = "legendary"
+    return random.choice(PORTAL_TAUNTS[tier])
+
 # Every command word the bot answers to. Used for "did you mean" — a typo
 # behind a `!` is intent, and answering silence is indistinguishable from the
 # bot being down.
@@ -78,6 +126,7 @@ COMMANDS: tuple[str, ...] = (
     "quest", "accept", "take", "refresh", "reroll", "shop", "store", "buy",
     "bag", "inventory", "items", "use", "spellbook", "spells", "book",
     "abilities", "equip", "swap", "graveyard", "who", "guild", "flee", "run",
+    "portal", "townportal", "tp", "escape",
 )
 
 
@@ -639,8 +688,8 @@ def handle(player: Player, text: str,
         if word in ("spellbook", "spells", "book", "abilities"):
             return render_spellbook(char)
 
-        if word in ("flee", "run"):
-            return _flee(char)
+        if word in ("portal", "townportal", "tp", "escape", "flee", "run"):
+            return _portal(char)
         if word in ("status", "me", "char"):
             return render_character(char)
         if word == "help":
@@ -650,7 +699,7 @@ def handle(player: Player, text: str,
             return [f"There's no action {word}. You have "
                     f"{len(char.abilities)}.", "", *render_combat(char)]
 
-        return _unknown(word, ["You're mid-fight — `!1`–`!4`, `!use`, `!flee`."])
+        return _unknown(word, ["You're mid-fight — `!1`–`!4`, `!use`, `!portal`."])
 
     # 4. Guild hall.
     if word in ("board", "quests", "quest"):
@@ -674,6 +723,11 @@ def handle(player: Player, text: str,
 
     if word in ("equip", "swap", "learn"):
         return _equip(char, parts[1:])
+
+    if word in ("portal", "townportal", "tp", "escape", "flee", "run"):
+        return ["🌀 _You cast Town Portal._",
+                "_It deposits you in the guild hall, where you already were._",
+                "_The clerk does not look up._ _'Impressive.'_"]
 
     if word in ("refresh", "reroll"):
         return _refresh_board(char)
@@ -851,16 +905,26 @@ def _use(char: Character, args: list[str], player: Player) -> list[str]:
     return lines + ["", *render_combat(char)]
 
 
-def _flee(char: Character) -> list[str]:
+def _portal(char: Character) -> list[str]:
+    """Bail out. No gold, no renown, no loot — and the clerk keeps score."""
     run = char.run
     assert run is not None
+    char.portals_used += 1
     char.run = None
     roll_board(char, run.rng)
+
     return [
-        f"🏃 _{char.name} legs it._ The {run.quest.name} contract is abandoned "
-        "— no pay, no renown, and absolutely no regrets.",
+        "🌀 **TOWN PORTAL** 🌀",
+        f"_A shimmering hole opens. {char.name} steps through it with more "
+        "haste than dignity and lands in the guild hall, smelling faintly of "
+        "somewhere else._",
         "",
-        "_Cowardice is a valid build._ `!board` for something gentler.",
+        f"The **{run.quest.name}** contract is abandoned. No gold. No renown. "
+        "No loot. You keep your skin and nothing else.",
+        "",
+        _portal_taunt(char.portals_used),
+        "",
+        f"_Portals taken: {char.portals_used}._ `!board` when you've recovered.",
     ]
 
 
@@ -904,7 +968,7 @@ def _help(player: Player) -> list[str]:
         "**In a fight**",
         "  `!1` `!2` `!3` `!4` — your four abilities, or type their names",
         "  `!use <item>` — spend a consumable, costs your turn",
-        "  `!flee` — abandon the contract, keep your life",
+        "  `!portal` — bail out. No rewards, and she will remember",
         "",
         "  `!help` — this list",
     ]
