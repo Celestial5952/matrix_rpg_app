@@ -50,6 +50,20 @@ damage, seeded runs replay identically), the routing rules that decide whether
 the bot speaks at all, persistence round-trips and corrupt-file recovery, and
 the adapter's own resilience paths.
 
+## Balance
+
+```bash
+python3 -m tools.balance --runs 2000
+```
+
+Plays thousands of headless runs with a few reference strategies and reports
+win rate, length and HP left per contract. The strategies are deliberately
+dumb — they're yardsticks, not how a human plays. If `always_strike` clears a
+tier-3 contract, the tactical layer isn't doing any work.
+
+Numbers move whenever `content.py` does, so read them fresh rather than
+trusting a figure written down here.
+
 ## Design decisions already settled
 
 **Plaintext replies, not reactions.** Matrix has no real button primitive.
