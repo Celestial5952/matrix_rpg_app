@@ -339,6 +339,26 @@ Parties are in-memory only. A party run is shared state that cannot be restored
 per-member without forking one fight into several identical solo ones, so a
 restart ends party contracts and `persist` drops any run carrying a `party_key`.
 
+## Naming another player
+
+`!duel`, `!give`, `!invite` and `!use horn` all accept an **@-mention**, a
+character name, a Matrix display name, a full MXID, or a localpart.
+
+Mentions need care, and this is the part that is easy to get wrong: an Element
+pill puts the *display name* into the message body, not the user id. So
+`!duel @Duckbill7317` arrives as `!duel Duckbill7317 ☭` — several words, with
+decoration, and nothing resembling an MXID. Naively that ate the wager on
+`!duel <who> <gold>` and the item on `!give <who> <item>`.
+
+Two fixes, both needed:
+
+- The adapter reads `m.mentions` (MSC3952) off the event and passes the real
+  user ids through. A mention wins outright over any text matching.
+- Arguments are *found* rather than positional — the wager is the first number
+  anywhere in the command, the gift is the first word that names something in
+  your bag. That keeps the commands working for clients that send no mention
+  metadata at all.
+
 ## Duels
 
 `!duel <who>` challenges, `!duel accept` takes it, `!duel <who> <gold>` puts

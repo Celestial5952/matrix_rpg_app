@@ -784,7 +784,8 @@ def render_party(party: Party | None, roster: dict[str, Player] | None,
 
 def _party_commands(player: Player, word: str, parts: list[str],
                     roster: dict[str, Player] | None,
-                    parties: Parties | None) -> list[str] | None:
+                    parties: Parties | None,
+                    mention: str | None = None) -> list[str] | None:
     """Formation only. Nothing here works once a contract has started."""
     if parties is None:
         return ["Parties aren't available right now."]
@@ -819,7 +820,7 @@ def _party_commands(player: Player, word: str, parts: list[str],
         if not parts:
             return ["Invite who? `!invite wren` · `!who` lists everyone."]
 
-        people = _match_players(parts[0], roster or {}, player.mxid)
+        people = _match_players(parts[0], roster or {}, player.mxid, mention)
         if not people:
             return [f"Nobody here called '{parts[0]}'."]
         if len(people) > 1:
@@ -1187,7 +1188,8 @@ def _duel_action(player: Player, duel: Duel, ability,
 
 def _duel_commands(player: Player, parts: list[str],
                    roster: dict[str, Player] | None, duels: Duels | None,
-                   parties: Parties | None) -> list[str]:
+                   parties: Parties | None,
+                   mention: str | None = None) -> list[str]:
     if duels is None:
         return ["Duelling isn't available right now."]
 
@@ -1250,7 +1252,7 @@ def _duel_commands(player: Player, parts: list[str],
     if parties and (party := parties.for_member(player.mxid)) and party.on_contract:
         return ["Your party is mid-contract. _Finish it first._"]
 
-    people = _match_players(parts[0], roster or {}, player.mxid)
+    people = _match_players(parts[0], roster or {}, player.mxid, mention)
     if not people:
         return [f"Nobody here called '{parts[0]}'."]
     if len(people) > 1:
@@ -1262,11 +1264,11 @@ def _duel_commands(player: Player, parts: list[str],
     if target.character.run is not None:
         return [f"**{target.character.name}** is out on a contract."]
 
-    wager = 0
-    if len(parts) > 1:
-        if not parts[1].isdigit():
-            return ["Wager what? `!duel wren 20`"]
-        wager = int(parts[1])
+    # Scan for the number rather than trusting its position: a mention pill
+    # can expand to several words ("Duckbill7317 ☭") and push it along.
+    numbers = [int(part) for part in parts[1:] if part.isdigit()]
+    wager = numbers[0] if numbers else 0
+    if wager:
         if wager > char.gold:
             return [f"You have {char.gold} gold. _Bold, though._"]
 
@@ -1322,7 +1324,11 @@ def handle(player: Player, text: str,
            roster: dict[str, Player] | None = None,
            guild: Guild | None = None,
            parties: Parties | None = None,
-           duels: Duels | None = None) -> list[str] | None:
+           duels: Duels | None = None,
+           mentions: list[str] | None = None) -> list[str] | None:
+    # A mention names a player exactly; text matching is the fallback.
+    mention = next((m for m in (mentions or []) if m != player.mxid), None)
+
     raw = text.strip()
     # The only gate that matters: no `!`, no reaction. Applies in every state,
     # so ordinary conversation can never be mistaken for input.
@@ -1458,7 +1464,7 @@ def handle(player: Player, text: str,
             return render_inventory(char)
 
         if word in ("give", "gift", "hand"):
-            return _give(player, parts[1:], roster)
+            return _give(player, parts[1:], roster, mention)
 
         if word in ("equip", "swap", "learn"):
             return ["Not mid-fight — you rewrite the book back at the hall.",
@@ -1531,10 +1537,12 @@ def handle(player: Player, text: str,
     # Note: `create` is deliberately absent — it belongs to character
     # creation. A party is started with `!party`.
     if word in ("duel", "challenge", "fight"):
-        return _duel_commands(player, parts[1:], roster, duels, parties)
+        return _duel_commands(player, parts[1:], roster, duels, parties,
+                              mention)
 
     if word in ("party", "invite", "ask", "join", "leave", "disband"):
-        handled = _party_commands(player, word, parts[1:], roster, parties)
+        handled = _party_commands(player, word, parts[1:], roster, parties,
+                                  mention)
         if handled is not None:
             return handled
 
@@ -1548,7 +1556,7 @@ def handle(player: Player, text: str,
         return render_inventory(char)
 
     if word in ("give", "gift", "hand"):
-        return _give(player, parts[1:], roster)
+        return _give(player, parts[1:], roster, mention)
 
     if word == "use":
         return _use_in_hall(char, parts[1:])
@@ -1639,34 +1647,47 @@ def _equip(char: Character, args: list[str]) -> list[str]:
     ]
 
 
-def _match_players(token: str, roster: dict[str, Player],
-                   exclude: str) -> list[Player]:
-    """Find a recipient by character name, MXID, or localpart.
+def _match_players(token: str, roster: dict[str, Player], exclude: str,
+                   mention: str | None = None) -> list[Player]:
+    """Find a player by mention, character name, display name, or MXID.
 
-    Character name first: it is what people actually see in the room, and the
-    MXID is unreadable on a phone.
+    A real Matrix mention wins outright: an Element pill puts the *display
+    name* in the message body, which may contain spaces and decoration and may
+    not resemble the MXID at all. `m.mentions` carries the actual user id, so
+    when it is there we should not be guessing from text.
     """
+    candidates = [p for p in roster.values()
+                  if p.mxid != exclude and p.character is not None]
+
+    if mention:
+        exact = [p for p in candidates if p.mxid == mention]
+        if exact:
+            return exact
+
     want = token.strip().lower().lstrip("@")
     if not want:
         return []
 
-    candidates = [p for p in roster.values()
-                  if p.mxid != exclude and p.character is not None]
+    def names(p: Player) -> set[str]:
+        return {
+            p.character.name.lower(),
+            p.character.name.lower().replace(" ", ""),
+            p.mxid.lower().lstrip("@"),
+            p.mxid.split(":")[0].lower().lstrip("@"),
+            (p.display_name or "").lower(),
+            (p.display_name or "").lower().replace(" ", ""),
+        }
 
-    exact = [p for p in candidates
-             if want in (p.character.name.lower(),
-                         p.character.name.lower().replace(" ", ""),
-                         p.mxid.lower().lstrip("@"),
-                         p.mxid.split(":")[0].lower().lstrip("@"))]
-    if exact:
-        return exact
+    hit = [p for p in candidates if want in names(p)]
+    if hit:
+        return hit
     return [p for p in candidates
-            if p.character.name.lower().startswith(want)
-            or p.mxid.lower().lstrip("@").startswith(want)]
+            if any(n.startswith(want) for n in names(p) if n)]
 
 
 def _give(player: Player, args: list[str],
-          roster: dict[str, Player] | None) -> list[str]:
+          roster: dict[str, Player] | None,
+          mention: str | None = None) -> list[str]:
     """Hand an item to another player. The whole point of scrolls being items."""
     char = player.character
     assert char is not None
@@ -1680,7 +1701,7 @@ def _give(player: Player, args: list[str],
     if not char.inventory:
         return ["🎒 Your bag is empty. Generous of you, though."]
 
-    people = _match_players(args[0], roster or {}, player.mxid)
+    people = _match_players(args[0], roster or {}, player.mxid, mention)
     if not people:
         return [f"Nobody here called '{args[0]}'.",
                 "_They need a living character to receive anything._ `!who`"]
@@ -1689,9 +1710,19 @@ def _give(player: Player, args: list[str],
         return [f"Which one? {names}"]
     recipient = people[0]
 
-    matches = match_items(args[1], sorted(char.inventory))
+    # Search the remaining words for the item rather than trusting position:
+    # a mention pill expands to several words ("Duckbill7317 ☭") and pushes
+    # the item name along.
+    carried = sorted(char.inventory)
+    matches: list = []
+    for token in args[1:]:
+        found = match_items(token, carried)
+        if found:
+            matches = found
+            break
     if not matches:
-        return [f"You're not carrying '{args[1]}'.", "", *render_inventory(char)]
+        return [f"You're not carrying '{args[-1]}'.", "",
+                *render_inventory(char)]
     if len(matches) > 1:
         return ["Which one? " + " · ".join(m.name for m in matches)]
     item = matches[0]
@@ -1719,7 +1750,8 @@ def _give(player: Player, args: list[str],
 
 
 def _summon(player: Player, args: list[str], roster: dict[str, Player] | None,
-            parties: Parties | None, party: Party | None) -> list[str]:
+            parties: Parties | None, party: Party | None,
+            mention: str | None = None) -> list[str]:
     """Blow the horn: drag somebody into a fight already in progress.
 
     Works from a solo fight too, which forms a party around the two of you —
@@ -1731,7 +1763,7 @@ def _summon(player: Player, args: list[str], roster: dict[str, Player] | None,
     if not args:
         return ["Summon who? `!use horn wren`"]
 
-    people = _match_players(args[0], roster or {}, player.mxid)
+    people = _match_players(args[0], roster or {}, player.mxid, mention)
     if not people:
         return [f"Nobody here called '{args[0]}'."]
     if len(people) > 1:

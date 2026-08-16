@@ -200,6 +200,22 @@ class Bot:
             player.display_name = display_name
         return player
 
+    @staticmethod
+    def _mentions(event: RoomMessageText) -> list[str]:
+        """User ids the sender actually pilled, per MSC3952 `m.mentions`.
+
+        An Element mention puts the *display name* in the message body, which
+        can carry spaces and decoration and need not resemble the MXID at all,
+        so text matching alone mis-parses it. This is the exact answer when the
+        client sends it, and harmlessly empty when it does not.
+        """
+        try:
+            content = getattr(event, "source", {}).get("content", {})
+            ids = content.get("m.mentions", {}).get("user_ids", [])
+        except AttributeError:
+            return []
+        return [str(i) for i in ids] if isinstance(ids, list) else []
+
     async def on_message(self, room: MatrixRoom, event: RoomMessageText) -> None:
         if room.room_id != self.room_id:
             return
@@ -220,7 +236,7 @@ class Bot:
         # unhandled exception in game logic takes the bot down for everyone.
         try:
             reply = handle(player, event.body, self.players, self.guild,
-                           self.parties, self.duels)
+                           self.parties, self.duels, self._mentions(event))
         except Exception:
             log.exception("handle() raised on %r from %s", event.body, event.sender)
             await self._send(["Something went wrong resolving that. "
