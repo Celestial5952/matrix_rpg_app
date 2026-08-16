@@ -7,6 +7,11 @@ The adapter's entire API:
 Returns a list of markdown lines, or None meaning "not for us, stay quiet" —
 the guild hall is a room people also chat in.
 
+**Every** message the bot acts on must start with `!`, with no exceptions —
+including the name you type during character creation. A mode where the bot
+silently swallows an ordinary sentence (because you happened to be mid-register)
+is precisely the confusion the prefix exists to prevent.
+
 Three gates, checked in order: mid-creation input, no-character-yet, and the
 normal hall/combat commands.
 """
@@ -43,7 +48,7 @@ def render_races() -> list[str]:
     lines.append("")
     lines.append("Race is who you are, not what you can do — pick the one you "
                  "like. Your class decides the numbers.")
-    lines.append("Reply with a number or the name.")
+    lines.append("Reply with `!` and a number or a name — e.g. `!2`.")
     return lines
 
 
@@ -56,7 +61,7 @@ def render_classes() -> list[str]:
         lines.append(f"   _{c.blurb}_")
         lines.append(f"   {kit}")
     lines.append("")
-    lines.append("Reply with a number or the name.")
+    lines.append("Reply with `!` and a number or a name — e.g. `!2`.")
     return lines
 
 
@@ -92,7 +97,7 @@ def render_board(char: Character) -> list[str]:
         lines.append(f"   {q.flavor}")
         lines.append(f"   Reward: {q.gold} gold, {q.renown} renown")
     lines.append("")
-    lines.append("`accept <n>` to take a contract.")
+    lines.append("`!accept <n>` to take a contract.")
     return lines
 
 
@@ -115,7 +120,7 @@ def render_combat(char: Character) -> list[str]:
             suffix = f" _({ab.cost} focus)_"
         elif ab.uses is not None:
             suffix = f" _({run.uses.get(ab.key, 0)} left)_"
-        mark = f"**{i}.**" if usable else f"~~{i}.~~"
+        mark = f"**!{i}**" if usable else f"~~!{i}~~"
         lines.append(f"  {mark} {ab.name}{suffix}")
     return lines
 
@@ -141,9 +146,10 @@ def begin_creation(player: Player) -> list[str]:
     return [
         "**A new adventurer signs the guild register.**",
         "",
-        f"What's your name? _({MIN_NAME}–{MAX_NAME} characters.)_",
+        f"What's your name? Reply with `!` and the name — e.g. `!Doc Weed`."
+        f" _({MIN_NAME}–{MAX_NAME} characters.)_",
         "",
-        "`cancel` to back out.",
+        "`!cancel` to back out.",
     ]
 
 
@@ -164,7 +170,7 @@ def _creation_input(player: Player, text: str) -> list[str]:
 
     if text.strip().lower() in ("cancel", "abort", "stop"):
         player.pending = None
-        return ["Register closed. `create` when you're ready."]
+        return ["Register closed. `!create` when you're ready."]
 
     if pending.step == "name":
         name, why = _validate_name(text)
@@ -200,11 +206,11 @@ def _creation_input(player: Player, text: str) -> list[str]:
             "Death is permanent here — when you fall, everything above is lost "
             "and you start again from nothing.",
             "",
-            "`board` to see what work there is.",
+            "`!board` to see what work there is.",
         ]
 
     player.pending = None  # unreachable, but never strand a player
-    return ["Something went wrong with the register. `create` to start over."]
+    return ["Something went wrong with the register. `!create` to start over."]
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +269,7 @@ def _advance_after_kill(char: Character) -> list[str]:
                          "Harder contracts are on the board.")
         roll_board(char, run.rng)
         lines.append("")
-        lines.append("Back to the hall. `board` to see what's up.")
+        lines.append("Back to the hall. `!board` to see what's up.")
         return lines
 
     run.encounter = combat.spawn(run.rng.choice(run.quest.pool), run.rng)
@@ -301,7 +307,7 @@ def _handle_death(player: Player) -> list[str]:
         "It is all gone — the renown, the gold, the rank. That is the bargain "
         "this guild offers.",
         "",
-        "`create` to sign the register again. `graveyard` to remember.",
+        "`!create` to sign the register again. `!graveyard` to remember.",
     ]
 
 
@@ -311,19 +317,19 @@ def _handle_death(player: Player) -> list[str]:
 
 def handle(player: Player, text: str) -> list[str] | None:
     raw = text.strip()
-    if not raw:
+    # The only gate that matters: no `!`, no reaction. Applies in every state,
+    # so ordinary conversation can never be mistaken for input.
+    if not raw.startswith("!"):
+        return None
+    body = raw[1:].strip()
+    if not body:
         return None
 
-    # 1. Mid-creation: the player opted in with `create`, so their next lines
-    #    belong to the register rather than the room.
+    # 1. Mid-creation: the register is waiting on this player's next `!` line.
     if player.pending is not None:
-        return _creation_input(player, raw)
+        return _creation_input(player, body)
 
-    explicit = raw.startswith("!")
-    body = raw[1:].strip() if explicit else raw
     parts = body.split()
-    if not parts:
-        return None
     word = parts[0].lower()
 
     # 2. No character: almost nothing works until you make one.
@@ -334,7 +340,7 @@ def handle(player: Player, text: str) -> list[str] | None:
             return render_graveyard(player)
         if word in ("help", "board", "quests", "status", "accept", "me"):
             return [
-                "You have no character. `create` to make one.",
+                "You have no character. `!create` to make one.",
                 "",
                 f"_{player.deaths} of yours "
                 f"{'has' if player.deaths == 1 else 'have'} died so far._"
@@ -384,7 +390,7 @@ def handle(player: Player, text: str) -> list[str] | None:
             roll_board(char)
             return ["You haven't read the board yet.", "", *render_board(char)]
         if len(parts) < 2 or not parts[1].isdigit():
-            return ["Which one? `accept 1`, `accept 2`…"]
+            return ["Which one? `!accept 1`, `!accept 2`…"]
         idx = int(parts[1]) - 1
         if not 0 <= idx < len(char.board):
             return [f"There's no contract {parts[1]} on the board."]
@@ -429,26 +435,26 @@ def _flee(char: Character) -> list[str]:
         f"{char.name} breaks off and runs. The {run.quest.name} contract is "
         "abandoned — no pay, no renown, but you live.",
         "",
-        "`board` to pick up something else.",
+        "`!board` to pick up something else.",
     ]
 
 
 def _help(char: Character) -> list[str]:
     if char.in_combat:
         slots = " · ".join(
-            f"`{i}` {ab.name}" for i, ab in enumerate(char.abilities, 1)
+            f"`!{i}` {ab.name}" for i, ab in enumerate(char.abilities, 1)
         )
         return [
-            "**In combat** — reply with a number, or the ability's name:",
+            "**In combat** — reply with `!` and a number, or the ability's name:",
             slots,
-            "`flee` to abandon the contract · `status` for your sheet.",
+            "`!flee` to abandon the contract · `!status` for your sheet.",
         ]
     return [
         "**Guild Hall**",
-        "`board` — read the quest board",
-        "`accept <n>` — take a contract",
-        "`status` — your character sheet",
-        "`graveyard` — your fallen",
+        "`!board` — read the quest board",
+        "`!accept <n>` — take a contract",
+        "`!status` — your character sheet",
+        "`!graveyard` — your fallen",
         "",
-        "Prefix anything with `!` if the room is busy (`!board`).",
+        "Every command starts with `!` — anything else is just conversation.",
     ]

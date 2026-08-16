@@ -31,10 +31,10 @@ def make_char(
 ) -> Player:
     """A Player with a live character, built through the register."""
     player = make_player(mxid)
-    handle(player, "create")
-    handle(player, name)
-    handle(player, race)
-    handle(player, char_class)
+    handle(player, "!create")
+    handle(player, f"!{name}")
+    handle(player, f"!{race}")
+    handle(player, f"!{char_class}")
     assert player.character is not None, "creation flow failed to make a character"
     return player
 

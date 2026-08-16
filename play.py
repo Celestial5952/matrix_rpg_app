@@ -19,8 +19,8 @@ def main() -> int:
     player = Player(mxid="@you:local", display_name="Playtester")
 
     print("=== Guild Hall (offline playtest) ===")
-    print("Ctrl-D to quit.\n")
-    for line in handle(player, "create") or []:
+    print("Every command starts with ! — e.g. !create, !board. Ctrl-D to quit.\n")
+    for line in handle(player, "!create") or []:
         print(line)
 
     while True:

@@ -110,7 +110,7 @@ def enrol(bot: Bot, sender: str = "@player:srv", name: str = "Tester") -> None:
     """Drive the register so `sender` has a living character, then reset the
     outbox — most routing tests care about what happens *after* creation."""
     for line in ("create", name, "human", "fighter"):
-        deliver(bot, line, sender=sender)
+        deliver(bot, f"!{line}", sender=sender)
     bot.client.sent.clear()
 
 
@@ -118,13 +118,13 @@ def enrol(bot: Bot, sender: str = "@player:srv", name: str = "Tester") -> None:
 
 def test_command_gets_a_reply(bot: Bot) -> None:
     enrol(bot)
-    deliver(bot, "board")
+    deliver(bot, "!board")
     assert len(bot.client.sent) == 1
     assert "Quest Board" in bot.client.sent[0]["body"]
 
 
 def test_a_character_is_required_before_the_board(bot: Bot) -> None:
-    deliver(bot, "board")
+    deliver(bot, "!board")
     assert "no character" in bot.client.sent[0]["body"].lower()
 
 
@@ -135,36 +135,36 @@ def test_chatter_gets_no_reply(bot: Bot) -> None:
 
 def test_own_events_are_ignored(bot: Bot) -> None:
     """Bot output contains `board` and `accept 1`; replying to itself would loop."""
-    deliver(bot, "board", sender="@bot:srv")
+    deliver(bot, "!board", sender="@bot:srv")
     assert bot.client.sent == []
 
 
 def test_other_rooms_are_ignored(bot: Bot) -> None:
-    asyncio.run(bot.on_message(FakeRoom("!other:srv"), FakeEvent("@p:srv", "board")))
+    asyncio.run(bot.on_message(FakeRoom("!other:srv"), FakeEvent("@p:srv", "!board")))
     assert bot.client.sent == []
 
 
 def test_cold_start_drops_backfill(bot: Bot) -> None:
     bot._resumed = False
-    deliver(bot, "board", ts=bot.start_ms - 60_000)
+    deliver(bot, "!board", ts=bot.start_ms - 60_000)
     assert bot.client.sent == [], "history older than startup must not re-execute"
 
 
 def test_cold_start_still_answers_live_messages(bot: Bot) -> None:
     bot._resumed = False
-    deliver(bot, "board", ts=bot.start_ms + 1_000)
+    deliver(bot, "!board", ts=bot.start_ms + 1_000)
     assert len(bot.client.sent) == 1
 
 
 def test_resumed_start_trusts_the_sync_token(bot: Bot) -> None:
     """With a token, anything delivered is by definition new."""
     bot._resumed = True
-    deliver(bot, "board", ts=bot.start_ms - 60_000)
+    deliver(bot, "!board", ts=bot.start_ms - 60_000)
     assert len(bot.client.sent) == 1
 
 
 def test_replies_carry_html(bot: Bot) -> None:
-    deliver(bot, "create")
+    deliver(bot, "!create")
     content = bot.client.sent[0]
     assert content["msgtype"] == "m.notice"
     assert content["format"] == "org.matrix.custom.html"
@@ -174,8 +174,8 @@ def test_replies_carry_html(bot: Bot) -> None:
 # --- identity + persistence ------------------------------------------------
 
 def test_players_are_keyed_by_mxid(bot: Bot) -> None:
-    deliver(bot, "board", sender="@a:srv")
-    deliver(bot, "board", sender="@b:srv")
+    deliver(bot, "!board", sender="@a:srv")
+    deliver(bot, "!board", sender="@b:srv")
     assert set(bot.players) == {"@a:srv", "@b:srv"}
 
 
@@ -186,7 +186,7 @@ def test_progress_persists_across_a_restart(bot: Bot) -> None:
         character=Character(name="Bruni", race_key="dwarf", class_key="cleric",
                             renown=25, gold=99),
     )
-    deliver(bot, "board", sender="@a:srv")  # any command triggers a save
+    deliver(bot, "!board", sender="@a:srv")  # any command triggers a save
 
     revived = Bot()  # same MATRIX_STATE_DIR, so this is a restart
     char = revived.players["@a:srv"].character
@@ -196,13 +196,13 @@ def test_progress_persists_across_a_restart(bot: Bot) -> None:
 
 
 def test_display_name_changes_are_tracked(bot: Bot) -> None:
-    deliver(bot, "board", sender="@a:srv")
+    deliver(bot, "!board", sender="@a:srv")
 
     class Renamed(FakeRoom):
         def user_name(self, user_id: str) -> str:
             return "NewName"
 
-    asyncio.run(bot.on_message(Renamed(ROOM), FakeEvent("@a:srv", "board")))
+    asyncio.run(bot.on_message(Renamed(ROOM), FakeEvent("@a:srv", "!board")))
     assert bot.players["@a:srv"].display_name == "NewName"
 
 
@@ -214,7 +214,7 @@ def test_a_throwing_handler_does_not_kill_the_loop(bot: Bot, monkeypatch) -> Non
         raise RuntimeError("bad content table")
 
     monkeypatch.setattr(adapter, "handle", boom)
-    deliver(bot, "board")  # must not raise
+    deliver(bot, "!board")  # must not raise
     assert len(bot.client.sent) == 1
     assert "went wrong" in bot.client.sent[0]["body"]
 
@@ -222,14 +222,14 @@ def test_a_throwing_handler_does_not_kill_the_loop(bot: Bot, monkeypatch) -> Non
 def test_rate_limit_is_retried(bot: Bot) -> None:
     err = _limit_exceeded()
     bot.client.responses = [err, object()]
-    deliver(bot, "board")
+    deliver(bot, "!board")
     assert len(bot.client.sent) == 2, "should have retried once and succeeded"
 
 
 def test_rate_limit_gives_up_eventually(bot: Bot) -> None:
     err = _limit_exceeded()
     bot.client.responses = [err] * 10
-    deliver(bot, "board")
+    deliver(bot, "!board")
     assert len(bot.client.sent) == adapter.MAX_SEND_ATTEMPTS
 
 
@@ -238,5 +238,5 @@ def test_non_rate_limit_errors_are_not_retried(bot: Bot) -> None:
         {"errcode": "M_FORBIDDEN", "error": "nope"}, ROOM
     )
     bot.client.responses = [err, object()]
-    deliver(bot, "board")
+    deliver(bot, "!board")
     assert len(bot.client.sent) == 1, "a permission error will not fix itself"

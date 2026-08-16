@@ -76,9 +76,15 @@ reason about. Players type `1` or `strike`.
 log and costs a lot: device verification, "unable to decrypt" after every bot
 restart, and no ability to read room history when debugging a bad fight.
 
-**Bare numbers are only commands when the sender has a live encounter.** The
-guild hall is a real room people also chat in. If you aren't fighting, typing
-`1` does nothing. `!`-prefixed commands always work.
+**Every command starts with `!`, with no exceptions.** The guild hall is a real
+room people also chat in, and `!` is what separates input from conversation.
+`board` does nothing; `!board` reads the board. `1` does nothing; `!1` is your
+move.
+
+The rule holds *during character creation too* — your name is `!Doc Weed`, not
+`Doc Weed`. An earlier version let the register capture your next raw line,
+which meant saying anything at the wrong moment silently named your character.
+A mode where ordinary sentences become input is exactly what the prefix is for.
 
 **`core/` never imports a Matrix SDK.** This is the load-bearing rule. Game logic
 takes an intent and returns a list of markdown lines. That means the whole game
@@ -114,11 +120,11 @@ attrition is the tension. Potions are limited per run.
 
 ## Characters and permadeath
 
-You cannot do anything until you `create` a character: name, then race, then
+You cannot do anything until you `!create` a character: name, then race, then
 class. The character is bound to your MXID, and you only ever have one alive.
 
 **Death is permanent and total.** The character is destroyed along with its
-renown, gold, and rank. All that survives is a tombstone in your `graveyard`,
+renown, gold, and rank. All that survives is a tombstone in your `!graveyard`,
 which is pure flavour and confers no mechanical advantage. This is a roguelike,
 not a roguelite — the ownership model in `state.py` exists to make that true by
 construction:

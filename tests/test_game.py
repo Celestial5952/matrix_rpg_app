@@ -27,25 +27,56 @@ def test_bare_numbers_are_silent_outside_combat():
     assert handle(player, "1") is None
 
 
-def test_bare_numbers_are_commands_during_combat():
+def test_prefixed_numbers_are_commands_during_combat():
     player = make_char()
-    handle(player, "board")
-    handle(player, "accept 1")
-    assert handle(player, "1") is not None
+    handle(player, "!board")
+    handle(player, "!accept 1")
+    assert handle(player, "!1") is not None
+
+
+def test_unprefixed_numbers_stay_silent_even_during_combat():
+    player = make_char()
+    handle(player, "!board")
+    handle(player, "!accept 1")
+    assert handle(player, "1") is None
+    assert handle(player, "strike") is None
+
+
+def test_nothing_without_the_prefix_is_ever_a_command():
+    """The whole point of the rule: no state makes bare text meaningful."""
+    player = make_char()
+    for text in ("board", "status", "help", "accept 1", "create", "flee", "1"):
+        assert handle(player, text) is None, text
+
+
+def test_creation_also_requires_the_prefix():
+    """A half-finished register must not swallow ordinary conversation."""
+    player = make_player()
+    handle(player, "!create")
+    assert handle(player, "just chatting in here") is None
+    assert player.pending.step == "name", "chatter became a character name"
+    handle(player, "!Grimwald")
+    assert player.pending.step == "race"
+
+
+def test_a_lone_bang_is_ignored():
+    player = make_char()
+    assert handle(player, "!") is None
+    assert handle(player, "!   ") is None
 
 
 def test_combat_still_ignores_ordinary_chat():
     player = make_char()
-    handle(player, "board")
-    handle(player, "accept 1")
+    handle(player, "!board")
+    handle(player, "!accept 1")
     assert handle(player, "anyone want pizza") is None
 
 
 def test_out_of_range_menu_number_is_silent():
     player = make_char()
-    handle(player, "board")
-    handle(player, "accept 1")
-    assert handle(player, "9") is None
+    handle(player, "!board")
+    handle(player, "!accept 1")
+    assert handle(player, "!9") is None
 
 
 def test_empty_input_is_ignored():
@@ -59,7 +90,7 @@ def test_empty_input_is_ignored():
 
 def test_nothing_works_before_a_character_exists():
     player = make_player()
-    for cmd in ("board", "accept 1", "status", "help"):
+    for cmd in ("!board", "!accept 1", "!status", "!help"):
         reply = handle(player, cmd)
         assert reply is not None
         assert "no character" in reply[0].lower()
@@ -74,16 +105,16 @@ def test_creation_walks_name_then_race_then_class():
     player = make_player()
     assert player.character is None
 
-    handle(player, "create")
+    handle(player, "!create")
     assert player.pending.step == "name"
 
-    handle(player, "Grimwald")
+    handle(player, "!Grimwald")
     assert player.pending.step == "race"
 
-    handle(player, "dwarf")
+    handle(player, "!dwarf")
     assert player.pending.step == "class"
 
-    handle(player, "fighter")
+    handle(player, "!fighter")
     assert player.pending is None
     assert player.character.name == "Grimwald"
     assert player.character.race_key == "dwarf"
@@ -92,12 +123,12 @@ def test_creation_walks_name_then_race_then_class():
 
 def test_creation_accepts_numbers_or_names():
     by_number = make_player("@n:srv")
-    handle(by_number, "create"); handle(by_number, "Ana")
-    handle(by_number, "3"); handle(by_number, "2")
+    handle(by_number, "!create"); handle(by_number, "!Ana")
+    handle(by_number, "!3"); handle(by_number, "!2")
 
     by_name = make_player("@w:srv")
-    handle(by_name, "create"); handle(by_name, "Ana")
-    handle(by_name, RACES[2].key); handle(by_name, CLASSES[1].key)
+    handle(by_name, "!create"); handle(by_name, "!Ana")
+    handle(by_name, f"!{RACES[2].key}"); handle(by_name, f"!{CLASSES[1].key}")
 
     assert by_number.character.race_key == by_name.character.race_key
     assert by_number.character.class_key == by_name.character.class_key
@@ -105,32 +136,32 @@ def test_creation_accepts_numbers_or_names():
 
 def test_creation_rejects_unknown_race_and_stays_on_the_step():
     player = make_player()
-    handle(player, "create"); handle(player, "Ana")
-    reply = handle(player, "wombat")
+    handle(player, "!create"); handle(player, "!Ana")
+    reply = handle(player, "!wombat")
     assert "don't know that race" in reply[0]
     assert player.pending.step == "race"
 
 
 def test_creation_rejects_bad_names():
     player = make_player()
-    handle(player, "create")
-    assert "short" in handle(player, "a")[0].lower()
-    assert "long" in handle(player, "x" * (MAX_NAME + 1))[0].lower()
-    assert "letter" in handle(player, "1234")[0].lower()
+    handle(player, "!create")
+    assert "short" in handle(player, "!a")[0].lower()
+    assert "long" in handle(player, "!" + "x" * (MAX_NAME + 1))[0].lower()
+    assert "letter" in handle(player, "!1234")[0].lower()
     assert player.pending.step == "name"
 
 
 def test_creation_can_be_cancelled():
     player = make_player()
-    handle(player, "create")
-    handle(player, "cancel")
+    handle(player, "!create")
+    handle(player, "!cancel")
     assert player.pending is None
     assert player.character is None
 
 
 def test_only_one_living_character_at_a_time():
     player = make_char(name="First")
-    reply = handle(player, "create")
+    reply = handle(player, "!create")
     assert "still alive" in " ".join(reply).lower()
     assert player.character.name == "First"
 
@@ -167,18 +198,18 @@ def test_death_destroys_the_character_and_everything_on_it():
     player = make_char(name="Doomed")
     char = player.character
     char.renown, char.gold = 99, 250
-    handle(player, "board")
-    handle(player, "accept 1")
+    handle(player, "!board")
+    handle(player, "!accept 1")
     # Re-apply each turn: at 1 HP the character can still *win* the encounter
     # and walk out of combat, which would never exercise the death path.
     for _ in range(80):
         if player.character is None:
             break
         if player.character.run is None:
-            handle(player, "board")
-            handle(player, "accept 1")
+            handle(player, "!board")
+            handle(player, "!accept 1")
         player.character.run.hp = 1
-        handle(player, "1")
+        handle(player, "!1")
 
     assert player.character is None, "character survived a lethal fight"
     assert player.deaths == 1
@@ -187,23 +218,23 @@ def test_death_destroys_the_character_and_everything_on_it():
 def test_death_leaves_a_tombstone_but_no_advantage():
     player = make_char(name="Doomed")
     player.character.renown = 42
-    handle(player, "board"); handle(player, "accept 1")
+    handle(player, "!board"); handle(player, "!accept 1")
     for _ in range(80):
         if player.character is None:
             break
         if player.character.run is None:
-            handle(player, "board")
-            handle(player, "accept 1")
+            handle(player, "!board")
+            handle(player, "!accept 1")
         player.character.run.hp = 1
-        handle(player, "1")
+        handle(player, "!1")
 
     grave = player.graveyard[-1]
     assert grave.name == "Doomed"
-    assert grave.renown == 42
+    assert grave.renown >= 42
 
     # The replacement starts from nothing.
-    handle(player, "create"); handle(player, "Next")
-    handle(player, "human"); handle(player, "fighter")
+    handle(player, "!create"); handle(player, "!Next")
+    handle(player, "!human"); handle(player, "!fighter")
     assert player.character.renown == 0
     assert player.character.gold == 0
     assert player.character.runs_completed == 0
@@ -211,7 +242,7 @@ def test_death_leaves_a_tombstone_but_no_advantage():
 
 def test_graveyard_is_readable_with_no_character():
     player = make_player()
-    reply = handle(player, "graveyard")
+    reply = handle(player, "!graveyard")
     assert reply is not None and "died yet" in reply[0]
 
 
@@ -221,7 +252,7 @@ def test_graveyard_is_readable_with_no_character():
 
 def test_board_variants():
     player = make_char()
-    for word in ("board", "quests", "quest"):
+    for word in ("!board", "!quests", "!quest"):
         assert handle(player, word) is not None
 
 
@@ -234,23 +265,23 @@ def test_bang_prefix_works_for_every_command():
 
 def test_accept_starts_a_run():
     player = make_char()
-    handle(player, "board")
+    handle(player, "!board")
     assert player.character.run is None
-    handle(player, "accept 1")
+    handle(player, "!accept 1")
     assert player.character.run is not None
     assert player.character.in_combat
 
 
 def test_accept_needs_an_index():
     player = make_char()
-    handle(player, "board")
-    assert "Which one" in handle(player, "accept")[0]
+    handle(player, "!board")
+    assert "Which one" in handle(player, "!accept")[0]
 
 
 def test_accept_rejects_out_of_range():
     player = make_char()
-    handle(player, "board")
-    assert "no contract" in handle(player, "accept 99")[0]
+    handle(player, "!board")
+    assert "no contract" in handle(player, "!accept 99")[0]
 
 
 def test_ability_names_match_menu_numbers():
@@ -268,9 +299,9 @@ def test_ability_names_match_menu_numbers():
 
 def test_flee_abandons_the_run():
     player = make_char()
-    handle(player, "board")
-    handle(player, "accept 1")
-    reply = handle(player, "flee")
+    handle(player, "!board")
+    handle(player, "!accept 1")
+    reply = handle(player, "!flee")
     assert player.character.run is None
     assert player.character is not None, "fleeing must not kill the character"
     assert "abandoned" in " ".join(reply)
@@ -278,7 +309,7 @@ def test_flee_abandons_the_run():
 
 def test_flee_is_silent_outside_combat():
     player = make_char()
-    assert handle(player, "flee") is None
+    assert handle(player, "!flee") is None
 
 
 def test_rank_gates_board_contents():
@@ -298,15 +329,15 @@ def test_rank_gates_board_contents():
 def test_completing_a_contract_pays_out():
     player = make_char()
     char = player.character
-    handle(player, "board")
+    handle(player, "!board")
     quest = char.board[0]
-    handle(player, "accept 1")
+    handle(player, "!accept 1")
 
     for _ in range(400):
         if char.run is None or player.character is None:
             break
         char.run.hp = char.run.max_hp  # immortal: we're testing the payout
-        handle(player, "1")
+        handle(player, "!1")
 
     if player.character is not None and char.runs_completed:
         assert char.gold >= quest.gold

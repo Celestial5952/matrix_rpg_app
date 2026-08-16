@@ -64,8 +64,8 @@ def test_run_state_is_not_persisted(tmp_path):
     """Documented tradeoff: a restart costs the contract, not the character."""
     path = tmp_path / "players.json"
     player = make_char()
-    handle(player, "board")
-    handle(player, "accept 1")
+    handle(player, "!board")
+    handle(player, "!accept 1")
     assert player.character.run is not None
 
     save_all(path, {player.mxid: player})
@@ -78,8 +78,8 @@ def test_pending_creation_is_not_persisted(tmp_path):
     """A half-filled register mid-restart would strand the player."""
     path = tmp_path / "players.json"
     player = make_player()
-    handle(player, "create")
-    handle(player, "Halfway")
+    handle(player, "!create")
+    handle(player, "!Halfway")
     save_all(path, {player.mxid: player})
     assert load_all(path)[player.mxid].pending is None
 
