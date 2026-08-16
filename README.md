@@ -108,6 +108,27 @@ adapters/
 tests/         pytest suite; no homeserver required
 ```
 
+## Items, gold and loot
+
+`!shop` sells consumables, `!buy <n>` purchases them, `!inventory` (or `!bag`)
+lists what you carry, `!use <item>` spends one mid-fight.
+
+Everything is **single use**. Permanent equipment would compete with class for
+the same design space, and under permadeath it would mean a character's power
+came mostly from how long it had been lucky. Spend it or lose it is the economy.
+
+Two rules make items a decision rather than a free win:
+
+- **Using an item costs your turn.** The monster's telegraphed move still lands.
+  Free healing would flatten every fight.
+- **An item that would do nothing is refused, not consumed.** Drinking a potion
+  at full HP used to silently burn it for 0 healing.
+
+Loot drops on contract completion, weighted by tier. Tier 1 can roll a dud on
+purpose — loot should feel like a result, not a wage. Tier 3 always drops.
+
+The bag dies with the character, like everything else.
+
 ## Combat model
 
 Monsters telegraph next turn's move (`The kobold raises the spear high in both
@@ -160,6 +181,7 @@ client; a 40-node skill constellation does not.
   `_italic_`, `` `code` `` — enough for current game text, not a general
   renderer
 - One room per process; no multi-room or per-space routing
+- No equipment, only consumables — deliberate for now, see above
 
 ## Matrix gotchas the adapter handles
 

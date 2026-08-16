@@ -17,6 +17,7 @@ import logging
 from pathlib import Path
 
 from .chargen import CLASSES_BY_KEY, RACES_BY_KEY
+from .items import ITEMS
 from .state import Character, Player, Tombstone
 
 log = logging.getLogger("guildhall.persist")
@@ -32,6 +33,7 @@ _CHARACTER_FIELDS: dict[str, object] = {
     "gold": 0,
     "runs_completed": 0,
     "created_at": 0.0,
+    "inventory": None,  # None -> {}; see _inventory_from
 }
 
 _TOMBSTONE_FIELDS: dict[str, object] = {
@@ -49,6 +51,7 @@ def _character_from(row: object, mxid: str) -> Character | None:
     if not isinstance(row, dict):
         return None
     kwargs = {k: row.get(k, d) for k, d in _CHARACTER_FIELDS.items()}
+    kwargs["inventory"] = _inventory_from(kwargs["inventory"])
     # A character whose race or class was deleted from chargen.py cannot be
     # rendered or fought with. Dropping it loses that character; keeping it
     # would raise KeyError on the player's next message.
@@ -63,6 +66,21 @@ def _character_from(row: object, mxid: str) -> Character | None:
     except TypeError as exc:
         log.warning("skipping unloadable character for %s: %s", mxid, exc)
         return None
+
+
+def _inventory_from(raw: object) -> dict[str, int]:
+    """Drop anything that is not a currently-known item with a positive count.
+
+    An item deleted from items.py would otherwise raise on the player's next
+    `!bag`, taking the bot down for everyone in the room.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, count in raw.items():
+        if key in ITEMS and isinstance(count, int) and count > 0:
+            out[key] = count
+    return out
 
 
 def _tombstones_from(rows: object) -> list[Tombstone]:

@@ -23,6 +23,7 @@ import random
 from . import combat
 from .chargen import CLASSES, RACES, find_class, find_race
 from .content import quests_for_rank
+from .items import ITEMS, SHOP_STOCK, match_items, roll_loot
 from .state import (
     MAX_NAME,
     focus_regen_for,
@@ -122,6 +123,54 @@ def render_combat(char: Character) -> list[str]:
             suffix = f" _({run.uses.get(ab.key, 0)} left)_"
         mark = f"**!{i}**" if usable else f"~~!{i}~~"
         lines.append(f"  {mark} {ab.name}{suffix}")
+    if char.inventory:
+        carried = " · ".join(
+            f"{ITEMS[k].name} ×{c}" for k, c in sorted(char.inventory.items())
+            if k in ITEMS
+        )
+        lines.append("")
+        lines.append(f"  **!use** — {carried}")
+    return lines
+
+
+def render_shop(char: Character) -> list[str]:
+    lines = [f"**The Quartermaster** — you have **{char.gold}** gold", ""]
+    for i, key in enumerate(SHOP_STOCK, 1):
+        item = ITEMS[key]
+        afford = "" if char.gold >= item.price else "  _(can't afford)_"
+        lines.append(f"**{i}. {item.name}** — {item.price}g{afford}")
+        lines.append(f"   _{item.blurb}_ {_effect_of(item)}")
+    lines.append("")
+    lines.append("`!buy <n>` or `!buy <n> <qty>`. Everything is single-use, and "
+                 "it all dies with you.")
+    return lines
+
+
+def _effect_of(item) -> str:
+    if item.kind == "heal":
+        return f"(+{item.heal} HP)"
+    if item.kind == "focus":
+        return f"(+{item.focus} focus)"
+    if item.kind == "damage":
+        armour = ", ignores armour" if item.ignores_armor else ""
+        return f"({item.damage} damage{armour})"
+    if item.kind == "buff":
+        return f"(next attack +{int(item.attack_bonus * 100)}%)"
+    return ""
+
+
+def render_inventory(char: Character) -> list[str]:
+    if not char.inventory:
+        lines = ["Your bag is empty."]
+    else:
+        lines = [f"**{char.name}'s bag** — {char.carried} carried", ""]
+        for i, (key, count) in enumerate(sorted(char.inventory.items()), 1):
+            item = ITEMS.get(key)
+            if item is None:
+                continue
+            lines.append(f"  **{i}.** {item.name} ×{count} {_effect_of(item)}")
+    lines.append("")
+    lines.append(f"**{char.gold}** gold. `!shop` to spend it, `!use <item>` in a fight.")
     return lines
 
 
@@ -264,6 +313,14 @@ def _advance_after_kill(char: Character) -> list[str]:
             f"**Contract complete — {run.quest.name}**",
             f"+{run.quest.gold} gold, +{run.quest.renown} renown.",
         ]
+        drops = roll_loot(run.quest.tier, run.rng)
+        for key in drops:
+            char.inventory[key] = char.inventory.get(key, 0) + 1
+        if drops:
+            names = " · ".join(ITEMS[k].name for k in drops)
+            lines.append(f"Salvaged from the bodies: **{names}**.")
+        else:
+            lines.append("_Nothing worth carrying home._")
         if char.rank > old_rank:
             lines.append(f"**{char.name} is promoted to Guild Rank {char.rank}.** "
                          "Harder contracts are on the board.")
@@ -371,6 +428,12 @@ def handle(player: Player, text: str) -> list[str] | None:
 
             return lines + ["", *render_combat(char)]
 
+        if word == "use":
+            return _use(char, parts[1:], player)
+
+        if word in ("bag", "inventory", "items"):
+            return render_inventory(char)
+
         if word in ("flee", "run"):
             return _flee(char)
         if word in ("status", "me", "char"):
@@ -395,6 +458,19 @@ def handle(player: Player, text: str) -> list[str] | None:
         if not 0 <= idx < len(char.board):
             return [f"There's no contract {parts[1]} on the board."]
         return start_run(char, char.board[idx])
+
+    if word in ("shop", "quartermaster", "store"):
+        return render_shop(char)
+
+    if word == "buy":
+        return _buy(char, parts[1:])
+
+    if word in ("bag", "inventory", "items"):
+        return render_inventory(char)
+
+    if word == "use":
+        return ["Nothing to use — you're not in a fight.",
+                "Items are for when it's going badly. `!bag` to see what you have."]
 
     if word in ("status", "me", "char", "sheet"):
         return render_character(char)
@@ -426,6 +502,80 @@ def _resolve_ability(char: Character, word: str):
     return None
 
 
+def _buy(char: Character, args: list[str]) -> list[str]:
+    if not args:
+        return ["Buy what? `!buy 1`, or `!buy 1 3` for three.", "", *render_shop(char)]
+
+    matches = match_items(args[0], SHOP_STOCK)
+    if not matches:
+        return [f"The quartermaster doesn't stock '{args[0]}'.", "", *render_shop(char)]
+    if len(matches) > 1:
+        return [f"Which one? " + " · ".join(m.name for m in matches)]
+    item = matches[0]
+
+    qty = 1
+    if len(args) > 1:
+        if not args[1].isdigit() or int(args[1]) < 1:
+            return ["How many? `!buy 1 3` buys three."]
+        qty = int(args[1])
+
+    total = item.price * qty
+    if total > char.gold:
+        affordable = char.gold // item.price
+        if affordable == 0:
+            return [f"{item.name} costs {item.price}g and you have {char.gold}g."]
+        return [f"{qty} × {item.name} is {total}g — you have {char.gold}g. "
+                f"You could afford {affordable}."]
+
+    char.gold -= total
+    char.inventory[item.key] = char.inventory.get(item.key, 0) + qty
+    return [
+        f"**Bought {qty} × {item.name}** for {total}g.",
+        f"{char.gold} gold left · {char.inventory[item.key]} in the bag.",
+    ]
+
+
+def _use(char: Character, args: list[str], player: Player) -> list[str]:
+    """Spend an item. Costs the turn, so the monster answers."""
+    if not char.inventory:
+        return ["Your bag is empty.", "", *render_combat(char)]
+
+    carried = sorted(char.inventory)
+    if not args:
+        return ["Use what? `!use potion`, or `!use 1` by bag position.",
+                "", *render_inventory(char)]
+
+    matches = match_items(args[0], carried)
+    if not matches:
+        return [f"You're not carrying '{args[0]}'.", "", *render_inventory(char)]
+    if len(matches) > 1:
+        return [f"Which one? " + " · ".join(m.name for m in matches)]
+    item = matches[0]
+
+    # Refuse rather than silently burn a single-use item for no effect.
+    run = char.run
+    if item.kind == "heal" and run.hp >= run.max_hp:
+        return [f"You're at full health — {item.name} would be wasted.",
+                "", *render_combat(char)]
+    if item.kind == "focus" and run.focus >= run.max_focus:
+        return [f"Your focus is already full — {item.name} would be wasted.",
+                "", *render_combat(char)]
+    if item.kind == "buff" and run.next_attack_bonus:
+        return ["Your edge is already honed — it would be wasted.",
+                "", *render_combat(char)]
+
+    lines = combat.use_item(char, item)
+    if not char.run.encounter.alive:
+        lines.append(f"The {char.run.encounter.monster.name} falls.")
+        return lines + _advance_after_kill(char)
+
+    lines += combat.monster_turn(char)
+    if not char.run.alive:
+        return lines + _handle_death(player)
+
+    return lines + ["", *render_combat(char)]
+
+
 def _flee(char: Character) -> list[str]:
     run = char.run
     assert run is not None
@@ -447,6 +597,7 @@ def _help(char: Character) -> list[str]:
         return [
             "**In combat** — reply with `!` and a number, or the ability's name:",
             slots,
+            "`!use <item>` to spend a consumable — it costs your turn.",
             "`!flee` to abandon the contract · `!status` for your sheet.",
         ]
     return [
@@ -454,6 +605,8 @@ def _help(char: Character) -> list[str]:
         "`!board` — read the quest board",
         "`!accept <n>` — take a contract",
         "`!status` — your character sheet",
+        "`!shop` — buy consumables · `!buy <n>`",
+        "`!bag` — what you're carrying",
         "`!graveyard` — your fallen",
         "",
         "Every command starts with `!` — anything else is just conversation.",

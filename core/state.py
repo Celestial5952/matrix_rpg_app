@@ -59,6 +59,22 @@ class Ability:
 
 
 @dataclass(frozen=True)
+class Item:
+    """A consumable. kind is 'heal', 'focus', 'damage' or 'buff'."""
+
+    key: str
+    name: str
+    kind: str
+    price: int
+    blurb: str = ""
+    heal: int = 0
+    focus: int = 0
+    damage: int = 0
+    ignores_armor: bool = False
+    attack_bonus: float = 0.0
+
+
+@dataclass(frozen=True)
 class Race:
     """Flavour only.
 
@@ -149,6 +165,8 @@ class Run:
     encounter: Encounter | None = None
     # Set by a guard ability, consumed by the monster's turn.
     pending_guard: float | None = None
+    # Set by a buff item, consumed by the next attack.
+    next_attack_bonus: float = 0.0
     rng: random.Random = field(default_factory=random.Random, repr=False)
 
     @property
@@ -177,6 +195,8 @@ class Character:
     renown: int = 0
     gold: int = 0
     runs_completed: int = 0
+    # item key -> count. Dies with the character, like everything else.
+    inventory: dict[str, int] = field(default_factory=dict)
     board: list[Quest] = field(default_factory=list)
     run: Run | None = None
     created_at: float = field(default_factory=time.time)
@@ -220,6 +240,10 @@ class Character:
     @property
     def in_combat(self) -> bool:
         return self.run is not None and self.run.encounter is not None
+
+    @property
+    def carried(self) -> int:
+        return sum(self.inventory.values())
 
     @property
     def title(self) -> str:
