@@ -335,6 +335,36 @@ it has a role beyond bigger numbers. Focus regenerates 1/turn and Guard grants
 HP and focus carry across encounters within a contract, with no rest between —
 attrition is the tension. Potions are limited per run.
 
+## Playing alone, in a DM
+
+Invite the bot to a one-to-one room and it answers there: same character, same
+guild, same everything. Contracts, adventures, the shop and the spellbook all
+work. It auto-accepts invites to two-person rooms and ignores invites to group
+rooms, because answering in an arbitrary room somebody dragged it into is how a
+bot becomes a nuisance.
+
+**Anything involving other people stays in the hall** — parties, duels and
+giving. A party fight narrated into one member's private chat is invisible to
+the rest of the party, so the bot refuses rather than splitting a fight across
+rooms. Reading `!who` and `!guild` is fine; involving people is not.
+
+Arrivals from async contracts follow you: the ticker delivers to whichever room
+you last spoke in.
+
+### Encryption is the catch
+
+The bot has **no E2EE keys**, and Element creates DMs encrypted by default. In
+an encrypted room every message you send is noise to it.
+
+Rather than sit there mute — which looks broken — it posts an unencrypted
+warning saying exactly that, which is visible because plaintext messages still
+render in encrypted rooms. To play one-to-one, create a room with encryption
+**off** and invite the bot to that; Element only offers the choice at creation
+and it cannot be undone.
+
+Supporting encrypted rooms means `matrix-nio[e2e]`, libolm, a crypto store and
+device verification. Doable, and not done.
+
 ## Multiplayer
 
 Everything is routed by MXID. `handle(player, text, roster, guild)` only ever

@@ -1477,7 +1477,8 @@ def handle(player: Player, text: str,
            guild: Guild | None = None,
            parties: Parties | None = None,
            duels: Duels | None = None,
-           mentions: list[str] | None = None) -> list[str] | None:
+           mentions: list[str] | None = None,
+           private: bool = False) -> list[str] | None:
     # A mention names a player exactly; text matching is the fallback.
     mention = next((m for m in (mentions or []) if m != player.mxid), None)
 
@@ -1520,6 +1521,24 @@ def handle(player: Player, text: str,
     char = player.character
     party = parties.for_member(player.mxid) if parties else None
     duel = duels.for_player(player.mxid) if duels else None
+
+    # A one-to-one chat is for playing alone. Anything involving other people
+    # stays in the hall, where those people can actually see it — a party
+    # fight narrated into somebody's private chat is invisible to half the
+    # party.
+    if private:
+        if party is not None and party.on_contract:
+            return ["🏰 _Your party is out on a contract._",
+                    "That's happening in the hall, where the rest of them "
+                    "can see it."]
+        if duel is not None:
+            return ["⚔️ _You're in the middle of a duel._",
+                    "Somebody is waiting for you in the hall."]
+        if word in ("party", "invite", "ask", "join", "disband", "duel",
+                    "challenge", "give", "gift", "hand"):
+            return [f"`!{word}` needs other people, so it happens in the hall.",
+                    "_This is the side door — contracts, adventures, shopping "
+                    "and the spellbook all work fine here._"]
 
     # 2b. A live duel is exclusive and binding. Nothing else runs until it
     #     is settled — that is the whole point of accepting one.

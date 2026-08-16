@@ -31,6 +31,7 @@ from html import escape
 from pathlib import Path
 
 from nio import (
+    InviteMemberEvent,
     AsyncClient,
     AsyncClientConfig,
     JoinError,
@@ -129,6 +130,13 @@ class Bot:
         # instant, which is what every test and the offline REPL want.
         set_travel_pace(int(os.environ.get("MATRIX_TRAVEL_SECONDS", "0")))
         self.travel_tick = max(5, int(os.environ.get("MATRIX_TRAVEL_TICK", "20")))
+
+        # Rooms other than the hall that we answer in: one-to-one chats, for
+        # playing alone. Where each player last spoke, so an arrival is
+        # delivered wherever they actually are.
+        self.dm_rooms: set[str] = set()
+        self.player_rooms: dict[str, str] = {}
+        self.warned_encrypted: set[str] = set()
         # mxid -> {"root": event_id, "frame": event_id}. A fight is one message
         # in the room that we keep editing; outcomes go in a thread off it.
         # Deliberately not persisted: after a restart the event ids may no
@@ -140,6 +148,7 @@ class Bot:
         config = AsyncClientConfig(request_timeout=30, max_timeout_retry_wait_time=30)
         self.client = AsyncClient(self.homeserver, self.user, config=config)
         self.client.add_event_callback(self.on_message, RoomMessageText)
+        self.client.add_event_callback(self.on_invite, InviteMemberEvent)
         self.client.add_response_callback(self.on_sync, SyncResponse)
         self.client.add_response_callback(self.on_sync_error, SyncError)
 
@@ -229,9 +238,73 @@ class Bot:
             return []
         return [str(i) for i in ids] if isinstance(ids, list) else []
 
-    async def on_message(self, room: MatrixRoom, event: RoomMessageText) -> None:
-        if room.room_id != self.room_id:
+    def _is_dm(self, room: MatrixRoom) -> bool:
+        """Two people in it and it is not the hall — that is a DM."""
+        if room.room_id == self.room_id:
+            return False
+        try:
+            return room.member_count <= 2
+        except Exception:  # noqa: BLE001 - membership may not be loaded yet
+            return False
+
+    async def on_invite(self, room: MatrixRoom, event: InviteMemberEvent) -> None:
+        """Accept invites to the configured room and to one-to-one chats.
+
+        Group rooms are declined by silence: answering in an arbitrary room
+        somebody dragged us into is how a bot becomes a nuisance.
+        """
+        if event.state_key != self.client.user_id:
             return
+        if room.room_id != self.room_id and not self._is_dm(room):
+            log.info("ignoring invite to group room %s", room.room_id)
+            return
+
+        result = await self.client.join(room.room_id)
+        if hasattr(result, "message"):
+            log.error("could not join %s: %s", room.room_id, result.message)
+            return
+        log.info("joined %s", room.room_id)
+        if room.room_id != self.room_id:
+            self.dm_rooms.add(room.room_id)
+            await self._greet(room)
+
+    async def _greet(self, room: MatrixRoom) -> None:
+        if getattr(room, "encrypted", False):
+            await self._warn_encrypted(room)
+            return
+        await self._send([
+            "🏰 **The guild keeps a side door.**",
+            "_You can play here on your own — same character, same guild, "
+            "same everything. It is the hall that is busy, not you._",
+            "",
+            "`!help` for the list · `!create` if you haven't yet.",
+            "_Parties and duels still happen in the hall, with everyone else._",
+        ], room_id=room.room_id)
+
+    async def _warn_encrypted(self, room: MatrixRoom) -> None:
+        """Say so out loud. A bot that silently ignores you looks broken."""
+        if room.room_id in self.warned_encrypted:
+            return
+        self.warned_encrypted.add(room.room_id)
+        log.warning("cannot read encrypted room %s", room.room_id)
+        await self._send([
+            "🔒 **I can't read this room — it's encrypted.**",
+            "_I have no encryption keys, so every message you send here is "
+            "noise to me. This one is going out unencrypted, which is why you "
+            "can see it at all._",
+            "",
+            "**To play one-to-one:** make a new room with encryption turned "
+            "**off** and invite me to that. Element only offers the choice "
+            "when the room is created — it cannot be undone afterwards.",
+            "",
+            "_Or just use the guild hall._",
+        ], room_id=room.room_id)
+
+    async def on_message(self, room: MatrixRoom, event: RoomMessageText) -> None:
+        if room.room_id != self.room_id and room.room_id not in self.dm_rooms:
+            if not self._is_dm(room):
+                return
+            self.dm_rooms.add(room.room_id)
         if event.sender == self.client.user_id:
             return  # never react to our own output — avoids command-string loops
 
@@ -241,19 +314,27 @@ class Bot:
         if not self._resumed and event.server_timestamp < self.start_ms:
             return
 
+        if getattr(room, "encrypted", False):
+            await self._warn_encrypted(room)
+            return
+
         name = await self._display_name(room, event.sender)
         player = self._player(event.sender, name)
+        self.player_rooms[event.sender] = room.room_id
+        private = room.room_id != self.room_id
         was_fighting = player.in_combat
 
         # One malformed command must not kill the sync loop. Without this, an
         # unhandled exception in game logic takes the bot down for everyone.
         try:
             reply = handle(player, event.body, self.players, self.guild,
-                           self.parties, self.duels, self._mentions(event))
+                           self.parties, self.duels, self._mentions(event),
+                           private)
         except Exception:
             log.exception("handle() raised on %r from %s", event.body, event.sender)
             await self._send(["Something went wrong resolving that. "
-                              "The error is in the bot log."])
+                              "The error is in the bot log."],
+                             room_id=room.room_id)
             return
 
         if reply is None:
@@ -268,13 +349,16 @@ class Bot:
             # Losing a save is survivable; refusing to reply is not.
             log.exception("could not persist players to %s", self.players_path)
 
-        await self._deliver(player, reply, was_fighting)
+        await self._deliver(player, reply, was_fighting, room.room_id)
 
     async def _deliver(self, player: Player, lines: list[str],
-                       was_fighting: bool) -> None:
+                       was_fighting: bool, room_id: str | None = None) -> None:
         """Decide whether this reply opens, updates, or closes a fight frame."""
-        if self.combat_style == "post":
-            await self._send(lines)
+        room_id = room_id or self.room_id
+        if self.combat_style == "post" or room_id != self.room_id:
+            # Frames and threads are a shared-room concern. In a one-to-one
+            # chat there is nobody else's output to keep out of the way of.
+            await self._send(lines, room_id=room_id)
             return
 
         mxid = player.mxid
@@ -318,7 +402,8 @@ class Bot:
 
     async def _send(self, lines: list[str], *, thread_root: str | None = None,
                     edits: str | None = None,
-                    mention: str | None = None) -> str | None:
+                    mention: str | None = None,
+                    room_id: str | None = None) -> str | None:
         """Send one message, retrying only when the server asks us to.
 
         Returns the event id, or None if it could not be sent.
@@ -327,7 +412,7 @@ class Bot:
                                 mention=mention)
         for attempt in range(1, MAX_SEND_ATTEMPTS + 1):
             resp = await self.client.room_send(
-                room_id=self.room_id,
+                room_id=room_id or self.room_id,
                 message_type="m.room.message",
                 content=content,
             )
@@ -371,7 +456,9 @@ class Bot:
                     if not lines:
                         continue
                     arrived = True
-                    await self._send(lines, mention=player.mxid)
+                    await self._send(
+                        lines, mention=player.mxid,
+                        room_id=self.player_rooms.get(player.mxid))
                 if arrived:
                     save_all(self.players_path, self.players)
             except asyncio.CancelledError:
@@ -438,6 +525,12 @@ class Bot:
             self.room_id,
             "resumed" if self._resumed else "cold start",
         )
+        for room_id, room in self.client.rooms.items():
+            if room_id != self.room_id and self._is_dm(room):
+                self.dm_rooms.add(room_id)
+        if self.dm_rooms:
+            log.info("also answering in %d one-to-one room(s)", len(self.dm_rooms))
+
         ticker = asyncio.create_task(self._travel_ticker())
         try:
             await self.client.sync_forever(
