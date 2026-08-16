@@ -291,6 +291,9 @@ class Run:
     pending_guard: float | None = None
     # Set by a buff item, consumed by the next attack.
     next_attack_bonus: float = 0.0
+    # Non-empty when this run belongs to a party. The encounter is then shared
+    # with the other members and must not be resumed independently.
+    party_key: str = ""
     rng: random.Random = field(default_factory=random.Random, repr=False)
 
     @property

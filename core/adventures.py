@@ -194,7 +194,8 @@ SUNLESS_ZIGGURAT = Adventure(
     ),
     gold=450,
     renown=70,
-    rewards=("greater_potion", "greater_potion", "alchemists_fire", "whetstone"),
+    rewards=("greater_potion", "greater_potion", "alchemists_fire",
+             "whetstone", "summoning_horn"),
 )
 
 

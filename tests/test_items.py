@@ -169,6 +169,11 @@ def test_buff_boosts_the_next_attack_then_expires():
     player = armed(gold=50)
     handle(player, "!buy whetstone")
     char = in_combat(player)
+
+    # Keep the monster alive through the boosted hit. Otherwise an Urgent
+    # contract -- one encounter instead of two -- ends the run on that swing
+    # and there is no `run` left to inspect.
+    char.run.encounter.hp = 9999
     handle(player, "!use whetstone")
     assert char.run.next_attack_bonus > 0
     handle(player, "!1")

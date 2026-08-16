@@ -189,6 +189,7 @@ def _contract_from_dict(d: object) -> Contract | None:
 def _run_to_dict(run: Run) -> dict:
     state = run.rng.getstate()
     out = {k: getattr(run, k) for k in _RUN_FIELDS}
+    out["party_key"] = run.party_key
     out["quest"] = _contract_to_dict(run.quest)
     out["uses"] = dict(run.uses)
     # getstate() is (version, tuple[int, ...], float|None); JSON flattens the
@@ -206,6 +207,11 @@ def _run_to_dict(run: Run) -> dict:
 
 
 def _run_from_dict(d: object) -> Run | None:
+    # A party run is shared state; restoring it per-member would silently turn
+    # one party fight into several identical solo ones. Dropped on purpose.
+    if isinstance(d, dict) and d.get("party_key"):
+        return None
+
     """Rebuild a live run. Returns None if anything no longer lines up —
     losing the contract is the documented fallback, and it is far better than
     resuming a fight against a monster whose moves have changed underneath."""

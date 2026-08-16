@@ -37,6 +37,7 @@ from .chargen import (
     renown_for_next,
 )
 from .guild import Guild, contribution
+from .party import MAX_PARTY, Parties, Party, scaled_for_party
 from .content import (
     STORY_CHANCE,
     plain_contract,
@@ -65,7 +66,7 @@ REROLL_COST = 5
 # so content tables stay about mechanics and the theatre lives in the view.
 SLOT_ICONS = {"basic": "⚔️", "signature": "🔥", "defence": "🛡️", "recovery": "💚"}
 ITEM_ICONS = {"heal": "🧪", "focus": "🔮", "damage": "💥", "buff": "🪓",
-              "scroll": "📜"}
+              "scroll": "📜", "summon": "📯"}
 RACE_ICONS = {"human": "🧑", "elf": "🧝", "dwarf": "🧔", "halfling": "🍄",
               "half_orc": "👹", "gnome": "🎩"}
 MONSTER_ICONS = {"cave_rat": "🐀", "kobold": "👺", "mire_toad": "🐸",
@@ -708,6 +709,385 @@ def render_roster(roster: dict[str, Player] | None) -> list[str]:
     return lines
 
 
+# ---------------------------------------------------------------------------
+# parties
+# ---------------------------------------------------------------------------
+
+def _name_of(mxid: str, roster: dict[str, Player] | None) -> str:
+    player = (roster or {}).get(mxid)
+    if player and player.character:
+        return player.character.name
+    return mxid.split(":")[0].lstrip("@")
+
+
+def render_party(party: Party | None, roster: dict[str, Player] | None,
+                 viewer: str) -> list[str]:
+    if party is None:
+        return [
+            "🧭 You're not in a party.",
+            "",
+            f"`!party` starts one (up to {MAX_PARTY}) · `!invite <who>` to fill it",
+            "_Parties share the monster, not the health bar. If everyone goes "
+            "down, everyone dies._",
+        ]
+
+    lines = [f"🧭 **Party** — {party.size}/{MAX_PARTY}", ""]
+    for i, mxid in enumerate(party.members):
+        name = _name_of(mxid, roster)
+        tags = []
+        if mxid == party.leader:
+            tags.append("leader")
+        if mxid == viewer:
+            tags.append("you")
+        member = (roster or {}).get(mxid)
+        if member and member.character and member.character.run:
+            run = member.character.run
+            tags.append("**down**" if run.hp <= 0 else f"{run.hp}/{run.max_hp}")
+        marker = "▶" if party.on_contract and party.next_actor(_standing(party, roster)) == mxid else " "
+        suffix = f" _({', '.join(tags)})_" if tags else ""
+        lines.append(f"  {marker} **{i + 1}. {name}**{suffix}")
+
+    if party.invited:
+        lines.append("")
+        lines.append("_Invited: " + " · ".join(
+            _name_of(m, roster) for m in sorted(party.invited)) + "_")
+
+    lines.append("")
+    if party.on_contract:
+        lines.append(f"On **{party.contract.name}** — encounter "
+                     f"{party.stage + 1} of {party.contract.stages}")
+        lines.append(f"_It is {_name_of(party.next_actor(_standing(party, roster)), roster)}'s turn._")
+    else:
+        lines.append("_In the hall._ The leader takes the contract for everyone.")
+        lines.append("`!leave` to go your own way · `!disband` to break it up")
+    return lines
+
+
+def _party_commands(player: Player, word: str, parts: list[str],
+                    roster: dict[str, Player] | None,
+                    parties: Parties | None) -> list[str] | None:
+    """Formation only. Nothing here works once a contract has started."""
+    if parties is None:
+        return ["Parties aren't available right now."]
+
+    char = player.character
+    assert char is not None
+    party = parties.for_member(player.mxid)
+
+    if word == "party":
+        if parts and parts[0].lower() in ("create", "new", "start"):
+            word = "create"
+        else:
+            return render_party(party, roster, player.mxid)
+
+    if word in ("create", "party"):
+        if party is not None:
+            return ["You're already in a party.", "",
+                    *render_party(party, roster, player.mxid)]
+        parties.create(player.mxid)
+        return [f"🧭 **A party forms around {char.name}.**",
+                f"_Up to {MAX_PARTY}._ `!invite <who>` to bring somebody along."]
+
+    if word in ("invite", "ask"):
+        if party is None:
+            party = parties.create(player.mxid)
+        if party.on_contract:
+            return ["Not mid-contract. _You cannot recruit through a wall._"]
+        if party.leader != player.mxid:
+            return [f"Only {_name_of(party.leader, roster)} can invite."]
+        if party.is_full:
+            return [f"The party is full at {MAX_PARTY}."]
+        if not parts:
+            return ["Invite who? `!invite wren` · `!who` lists everyone."]
+
+        people = _match_players(parts[0], roster or {}, player.mxid)
+        if not people:
+            return [f"Nobody here called '{parts[0]}'."]
+        if len(people) > 1:
+            return ["Which one? " + " · ".join(p.character.name for p in people)]
+
+        guest = people[0]
+        if parties.for_member(guest.mxid) is not None:
+            return [f"**{guest.character.name}** is already in a party."]
+        party.invited.add(guest.mxid)
+        return [f"📨 **{guest.character.name}** is invited to "
+                f"{char.name}'s party.",
+                f"_They accept with_ `!join {char.name.split()[0].lower()}`."]
+
+    if word in ("join", "accept"):
+        if party is not None:
+            return ["You're already in a party. `!leave` first."]
+        pending = parties.invitations_for(player.mxid)
+        if not pending:
+            return ["Nobody has invited you anywhere. _Awkward._"]
+        if parts:
+            wanted = [p for p in pending
+                      if _name_of(p.leader, roster).lower().startswith(
+                          parts[0].strip().lower())]
+            pending = wanted or pending
+        if len(pending) > 1:
+            return ["Which party? " + " · ".join(
+                _name_of(p.leader, roster) for p in pending)]
+
+        target = pending[0]
+        if target.is_full:
+            return ["That party filled up while you were deciding."]
+        if target.on_contract:
+            return ["They've already set out without you."]
+        target.invited.discard(player.mxid)
+        target.members.append(player.mxid)
+        return [f"🧭 **{char.name}** joins "
+                f"{_name_of(target.leader, roster)}'s party.",
+                "", *render_party(target, roster, player.mxid)]
+
+    if word == "leave":
+        if party is None:
+            return ["You're not in a party."]
+        if party.on_contract:
+            return ["Not mid-contract — `!portal` takes the whole party home."]
+        parties.remove_member(party, player.mxid)
+        return [f"🧭 **{char.name}** leaves the party."]
+
+    if word == "disband":
+        if party is None:
+            return ["You're not in a party."]
+        if party.leader != player.mxid:
+            return [f"Only {_name_of(party.leader, roster)} can disband it."]
+        if party.on_contract:
+            return ["Not mid-contract — `!portal` takes everyone home."]
+        parties.disband(party)
+        return ["🧭 _The party breaks up. No hard feelings._"]
+
+    return None
+
+
+def _members_of(party: Party, roster: dict[str, Player] | None) -> list[Player]:
+    return [p for p in ((roster or {}).get(m) for m in party.members)
+            if p is not None and p.character is not None]
+
+
+def _standing(party: Party, roster: dict[str, Player] | None) -> set[str]:
+    return {p.mxid for p in _members_of(party, roster)
+            if p.character.run is not None and p.character.run.hp > 0}
+
+
+def _spawn_for_party(party: Party, monster_key: str):
+    """One Encounter, shared by reference across every member's Run."""
+    encounter = combat.spawn(monster_key, party.rng, party.contract)
+    encounter.monster = scaled_for_party(encounter.monster, party.size)
+    encounter.hp = encounter.monster.max_hp
+    return encounter
+
+
+def _sync_party_encounter(party: Party, roster: dict[str, Player] | None) -> None:
+    for member in _members_of(party, roster):
+        run = member.character.run
+        if run is not None:
+            run.encounter = party.encounter
+            run.stage = party.stage
+
+
+def _next_party_monster(party: Party) -> str:
+    contract = party.contract
+    if contract.is_adventure:
+        return contract.chapters[party.stage].monster
+    return party.rng.choice(contract.pool)
+
+
+def start_party_run(party: Party, roster: dict[str, Player] | None,
+                    contract) -> list[str]:
+    """Everyone sets out together on the leader's contract."""
+    party.contract = contract
+    party.stage = 0
+    party.begin_round()
+
+    for member in _members_of(party, roster):
+        char = member.character
+        char.run = Run(
+            quest=contract,
+            hp=char.max_hp, max_hp=char.max_hp,
+            focus=char.max_focus, max_focus=char.max_focus,
+            power=char.power,
+            focus_regen=focus_regen_for(char.max_focus),
+            uses={a.key: a.uses for a in char.abilities if a.uses is not None},
+            rng=party.rng,
+            party_key=party.key,
+        )
+
+    party.encounter = _spawn_for_party(party, _next_party_monster(party))
+    _sync_party_encounter(party, roster)
+
+    names = " · ".join(m.character.name for m in _members_of(party, roster))
+    return [
+        f"🧭 **{contract.name}** — a party of {party.size} sets out",
+        f"_{names}_",
+        "",
+        contract.flavor if contract.is_adventure else f"_{contract.flavor}_",
+        "",
+        f"_The {party.encounter.monster.name} has been sized up accordingly._",
+        "",
+        *render_party_combat(party, roster),
+    ]
+
+
+def render_party_combat(party: Party,
+                        roster: dict[str, Player] | None) -> list[str]:
+    enc = party.encounter
+    assert enc is not None
+    lines = [
+        f"{MONSTER_ICONS.get(enc.monster.key, '👹')} **{enc.monster.name}**  "
+        f"{combat.hp_bar(enc.hp, enc.monster.max_hp)} "
+        f"{enc.hp}/{enc.monster.max_hp}",
+        f"_{enc.next_move.telegraph}_",
+        "",
+    ]
+    turn = party.next_actor(_standing(party, roster))
+    for member in _members_of(party, roster):
+        run = member.character.run
+        if run is None:
+            continue
+        marker = "▶" if member.mxid == turn else " "
+        if run.hp <= 0:
+            lines.append(f"  {marker} 💀 **{member.character.name}** — _down_")
+        else:
+            lines.append(
+                f"  {marker} **{member.character.name}**  "
+                f"{combat.hp_bar(run.hp, run.max_hp)} {run.hp}/{run.max_hp} · "
+                f"✨ {run.focus}/{run.max_focus}")
+
+    current = (roster or {}).get(turn)
+    if current and current.character:
+        lines.append("")
+        lines.append(f"**{current.character.name}'s turn** — "
+                     + " · ".join(f"`!{i}` {a.name}" for i, a
+                                  in enumerate(current.character.abilities, 1)))
+    return lines
+
+
+def _party_wipe(party: Party, roster: dict[str, Player] | None,
+                parties: Parties) -> list[str]:
+    """Everyone is down. Everyone dies — this is the price of going together."""
+    lines = ["", "💀💀 **THE WHOLE PARTY GOES DOWN** 💀💀", ""]
+    for member in list(_members_of(party, roster)):
+        lines += _handle_death(member)
+    parties.disband(party)
+    return lines
+
+
+def _party_victory(party: Party, roster: dict[str, Player] | None,
+                   guild: Guild | None, parties: Parties) -> list[str]:
+    """Contract complete. Downed members are picked up, everyone is paid."""
+    contract = party.contract
+    lines = ["", f"🎉 **CONTRACT COMPLETE — {contract.name}** 🎉"]
+
+    revived = []
+    for member in _members_of(party, roster):
+        char = member.character
+        run = char.run
+        if run is not None and run.hp <= 0:
+            revived.append(char.name)
+        char.run = None
+        char.gold += contract.gold
+        char.renown += contract.renown
+        char.runs_completed += 1
+        for key in roll_loot(contract.tier, party.rng, _scroll_bonus(guild)):
+            char.inventory[key] = char.inventory.get(key, 0) + 1
+        roll_board(char, party.rng, _board_size(guild))
+
+    if revived:
+        lines.append(f"_{' and '.join(revived)} are carried out and will be "
+                     "fine, mostly._")
+    lines.append(f"**Each** of you: +{contract.gold} gold, "
+                 f"+{contract.renown} renown.")
+
+    if guild is not None:
+        gained = contribution(contract.renown,
+                              adventure=bool(contract.adventure_key))
+        before = guild.level
+        guild.renown += gained
+        guild.contracts_completed += 1
+        if contract.adventure_key:
+            guild.adventures_completed += 1
+        lines.append(f"🏰 _The guild is **{gained}** renown richer._")
+        if guild.level > before:
+            lines.append(f"🎊 **THE GUILD IS NOW {guild.tier.name.upper()}!** 🎊")
+
+    party.contract = None
+    party.encounter = None
+    party.stage = 0
+    party.begin_round()
+    lines.append("")
+    lines.append("_The party stands down. Still together._ `!party`")
+    return lines
+
+
+def _party_end_of_turn(player: Player, party: Party,
+                       roster: dict[str, Player] | None) -> list[str]:
+    """Mark the move, and let the monster answer once everyone has gone."""
+    lines: list[str] = []
+    standing = _standing(party, roster)
+    if not party.record_action(player.mxid, standing):
+        return lines
+
+    party.begin_round()
+    if standing:
+        target = (roster or {})[party.rng.choice(sorted(standing))]
+        lines.append("")
+        lines += combat.monster_turn(target.character)
+        if target.character.run.hp <= 0:
+            target.character.run.hp = 0
+            lines.append(f"💀 **{target.character.name} goes down.**")
+    return lines
+
+
+def _party_after_action(player: Player, party: Party,
+                        roster: dict[str, Player] | None) -> list[str]:
+    lines: list[str] = []
+    if party.encounter.alive:
+        lines += _party_end_of_turn(player, party, roster)
+    return lines + ["", *render_party_combat(party, roster)]
+
+
+def _party_action(player: Player, party: Party, ability,
+                  roster: dict[str, Player] | None, guild: Guild | None,
+                  parties: Parties) -> list[str]:
+    """One member's turn against the shared monster."""
+    char = player.character
+    run = char.run
+    lines = combat.player_turn(char, ability)
+
+    if not party.encounter.alive:
+        lines.append(f"The {party.encounter.monster.name} falls.")
+        party.stage += 1
+        if party.stage >= party.contract.stages:
+            return lines + _party_victory(party, roster, guild, parties)
+
+        if party.contract.is_adventure:
+            chapter = party.contract.chapters[party.stage]
+            previous = party.contract.chapters[party.stage - 1]
+            if previous.aftermath:
+                lines += ["", previous.aftermath]
+            lines += ["", chapter.beat]
+            if chapter.rest:
+                for member in _members_of(party, roster):
+                    member_run = member.character.run
+                    if member_run and member_run.hp > 0:
+                        member_run.hp = min(member_run.max_hp,
+                                            member_run.hp + chapter.rest)
+                lines.append(f"_The party takes a moment. **+{chapter.rest}** HP "
+                             "to everyone still standing._")
+
+        party.encounter = _spawn_for_party(party, _next_party_monster(party))
+        _sync_party_encounter(party, roster)
+        party.begin_round()
+        return lines + ["", *render_party_combat(party, roster)]
+
+    lines += _party_end_of_turn(player, party, roster)
+    if not _standing(party, roster):
+        return lines + _party_wipe(party, roster, parties)
+    return lines + ["", *render_party_combat(party, roster)]
+
+
 def render_guild(guild: Guild | None,
                  roster: dict[str, Player] | None) -> list[str]:
     if guild is None:
@@ -745,7 +1125,8 @@ def render_guild(guild: Guild | None,
 
 def handle(player: Player, text: str,
            roster: dict[str, Player] | None = None,
-           guild: Guild | None = None) -> list[str] | None:
+           guild: Guild | None = None,
+           parties: Parties | None = None) -> list[str] | None:
     raw = text.strip()
     # The only gate that matters: no `!`, no reaction. Applies in every state,
     # so ordinary conversation can never be mistaken for input.
@@ -783,6 +1164,40 @@ def handle(player: Player, text: str,
         return _unknown(word, ["You have no character yet — `!create` first."])
 
     char = player.character
+    party = parties.for_member(player.mxid) if parties else None
+
+    # 3a. Party combat. The shared encounter is reachable only through here,
+    #     and only by members whose turn it is.
+    if party is not None and party.on_contract:
+        ability = _resolve_ability(char, word)
+        if ability is not None:
+            if char.run is None or char.run.hp <= 0:
+                return ["💀 You're down. The others are still fighting.",
+                        "", *render_party_combat(party, roster)]
+            if party.next_actor(_standing(party, roster)) != player.mxid:
+                return [f"_Wait your turn._ It's "
+                        f"**{_name_of(party.next_actor(_standing(party, roster)), roster)}**'s move.",
+                        "", *render_party_combat(party, roster)]
+            usable, why = combat.ability_is_legal(char, ability)
+            if not usable:
+                return [why, "", *render_party_combat(party, roster)]
+            return _party_action(player, party, ability, roster, guild, parties)
+
+        if word in ("portal", "townportal", "tp", "escape", "flee", "run"):
+            return _party_portal(player, party, roster, parties)
+        if word == "party":
+            return render_party(party, roster, player.mxid)
+        if word in ("status", "me", "char", "sheet"):
+            return render_character(char)
+        if word in ("bag", "inventory", "items"):
+            return render_inventory(char)
+        if word == "use":
+            return _use_in_party(player, party, parts[1:], roster, parties)
+        if word == "help":
+            return _help(player)
+        if word.isdigit():
+            return [f"There's no action {word}."]
+        return _unknown(word, ["You're in a party fight — `!1`–`!4`, `!portal`."])
 
     # 3. In combat: a bare number is a command only because this player has a
     #    live encounter. Everyone else typing "1" is just chatting.
@@ -805,7 +1220,7 @@ def handle(player: Player, text: str,
             return lines + ["", *render_combat(char)]
 
         if word == "use":
-            return _use(char, parts[1:], player, guild)
+            return _use(char, parts[1:], player, guild, roster, parties)
 
         if word in ("bag", "inventory", "items"):
             return render_inventory(char)
@@ -848,6 +1263,13 @@ def handle(player: Player, text: str,
         idx = int(parts[1]) - 1
         if not 0 <= idx < len(char.board):
             return [f"There's no contract {parts[1]} on the board."]
+
+        if party is not None:
+            if party.leader != player.mxid:
+                return [f"**{_name_of(party.leader, roster)}** takes the "
+                        "contracts for this party."]
+            if party.size > 1:
+                return start_party_run(party, roster, char.board[idx])
         return start_run(char, char.board[idx])
 
     if word in ("spellbook", "spells", "book", "abilities"):
@@ -863,6 +1285,13 @@ def handle(player: Player, text: str,
 
     if word in ("refresh", "reroll"):
         return _refresh_board(char, guild)
+
+    # Note: `create` is deliberately absent — it belongs to character
+    # creation. A party is started with `!party`.
+    if word in ("party", "invite", "ask", "join", "leave", "disband"):
+        handled = _party_commands(player, word, parts[1:], roster, parties)
+        if handled is not None:
+            return handled
 
     if word in ("shop", "quartermaster", "store"):
         return render_shop(char)
@@ -901,6 +1330,15 @@ def handle(player: Player, text: str,
         return _help(player)
 
     if word.isdigit():
+        others = [p for p in (parties.by_key.values() if parties else [])
+                  if p.on_contract]
+        if others:
+            return [
+                "🛡️ _Your spell splashes harmlessly against somebody else's "
+                "fight._",
+                "You're not in that party, so nothing you do reaches it.",
+                "`!party` to start your own · `!board` for your own work.",
+            ]
         return ["Numbers are for fights and menus. "
                 "`!accept <n>` to take a contract."]
 
@@ -1035,6 +1473,140 @@ def _give(player: Player, args: list[str],
     return lines
 
 
+def _summon(player: Player, args: list[str], roster: dict[str, Player] | None,
+            parties: Parties | None, party: Party | None) -> list[str]:
+    """Blow the horn: drag somebody into a fight already in progress.
+
+    Works from a solo fight too, which forms a party around the two of you —
+    the horn is the one thing that can change a party's roster mid-contract.
+    """
+    char = player.character
+    if parties is None:
+        return ["Parties aren't available right now."]
+    if not args:
+        return ["Summon who? `!use horn wren`"]
+
+    people = _match_players(args[0], roster or {}, player.mxid)
+    if not people:
+        return [f"Nobody here called '{args[0]}'."]
+    if len(people) > 1:
+        return ["Which one? " + " · ".join(p.character.name for p in people)]
+
+    guest = people[0]
+    if parties.for_member(guest.mxid) is not None:
+        return [f"**{guest.character.name}** is already in a party."]
+    if guest.character.run is not None:
+        return [f"**{guest.character.name}** is in the middle of their own "
+                "contract. _The horn is loud, not rude._"]
+
+    if party is None:
+        party = parties.create(player.mxid)
+        party.contract = char.run.quest
+        party.stage = char.run.stage
+        party.encounter = char.run.encounter
+        party.rng = char.run.rng
+        char.run.party_key = party.key
+    if party.is_full:
+        return [f"The party is already {MAX_PARTY} strong."]
+
+    party.members.append(guest.mxid)
+    other = guest.character
+    other.run = Run(
+        quest=party.contract,
+        hp=other.max_hp, max_hp=other.max_hp,
+        focus=other.max_focus, max_focus=other.max_focus,
+        power=other.power,
+        focus_regen=focus_regen_for(other.max_focus),
+        uses={a.key: a.uses for a in other.abilities if a.uses is not None},
+        rng=party.rng,
+        party_key=party.key,
+    )
+    other.run.encounter = party.encounter
+    other.run.stage = party.stage
+
+    # The monster does not get tougher retroactively — arriving late is the
+    # whole advantage of the horn, and scaling it up would erase that.
+    char.inventory["summoning_horn"] = char.inventory.get("summoning_horn", 0) - 1
+    if char.inventory["summoning_horn"] <= 0:
+        del char.inventory["summoning_horn"]
+
+    return [
+        "📯 **THE HORN SOUNDS** 📯",
+        f"_A note like a door opening in a wall that had no door. "
+        f"**{other.name}** arrives mid-swing, holding a cup of something, "
+        "extremely confused._",
+        "",
+        f"**{other.name}** joins the fight at full strength.",
+        "",
+        *render_party_combat(party, roster),
+    ]
+
+
+def _use_in_party(player: Player, party: Party, args: list[str],
+                  roster: dict[str, Player] | None,
+                  parties: Parties | None) -> list[str]:
+    char = player.character
+    if not args:
+        return ["Use what?", "", *render_inventory(char)]
+
+    matches = match_items(args[0], sorted(char.inventory))
+    if not matches:
+        return [f"You're not carrying '{args[0]}'.", "", *render_inventory(char)]
+    if len(matches) > 1:
+        return ["Which one? " + " · ".join(m.name for m in matches)]
+
+    item = matches[0]
+    if item.kind == "summon":
+        return _summon(player, args[1:], roster, parties, party)
+    if item.kind == "scroll":
+        return ["Not mid-fight."]
+    if party.next_actor(_standing(party, roster)) != player.mxid:
+        return [f"_Wait your turn._ It's "
+                f"**{_name_of(party.next_actor(_standing(party, roster)), roster)}**'s move."]
+
+    run = char.run
+    if item.kind == "heal" and run.hp >= run.max_hp:
+        return [f"You're at full health — {item.name} would be wasted."]
+    if item.kind == "focus" and run.focus >= run.max_focus:
+        return [f"Your focus is already full — {item.name} would be wasted."]
+
+    lines = combat.use_item(char, item)
+    return lines + _party_after_action(player, party, roster)
+
+
+def _party_portal(player: Player, party: Party,
+                  roster: dict[str, Player] | None,
+                  parties: Parties) -> list[str]:
+    """One member bails and the whole party goes with them."""
+    contract = party.contract
+    names = []
+    for member in _members_of(party, roster):
+        char = member.character
+        char.portals_used += 1
+        char.run = None
+        roll_board(char, party.rng)
+        names.append(char.name)
+
+    party.contract = None
+    party.encounter = None
+    party.stage = 0
+    party.begin_round()
+
+    puller = player.character.name
+    return [
+        "🌀 **TOWN PORTAL** 🌀",
+        f"_{puller} opens it and the whole party goes through, which is the "
+        "agreement, whatever anyone says afterwards._",
+        "",
+        f"**{contract.name}** is abandoned. No gold, no renown, no loot — "
+        f"for any of {len(names)} of you.",
+        "",
+        _portal_taunt(player.character.portals_used),
+        "",
+        "_The party is still together._ `!party`",
+    ]
+
+
 def _refresh_board(char: Character, guild: Guild | None = None) -> list[str]:
     """Pay to have the board rewritten. Gives gold a second sink."""
     if char.gold < REROLL_COST:
@@ -1122,7 +1694,9 @@ def _use_in_hall(char: Character, args: list[str]) -> list[str]:
 
 
 def _use(char: Character, args: list[str], player: Player,
-         guild: Guild | None = None) -> list[str]:
+         guild: Guild | None = None,
+         roster: dict[str, Player] | None = None,
+         parties: Parties | None = None) -> list[str]:
     """Spend an item. Costs the turn, so the monster answers."""
     if not char.inventory:
         return ["Your bag is empty.", "", *render_combat(char)]
@@ -1138,6 +1712,8 @@ def _use(char: Character, args: list[str], player: Player,
     if len(matches) > 1:
         return [f"Which one? " + " · ".join(m.name for m in matches)]
     item = matches[0]
+    if item.kind == "summon":
+        return _summon(player, args[1:], roster, parties, None)
     if item.kind == "scroll":
         return ["Not mid-fight. _Reading a teleport scroll with something "
                 "chewing on you is how people end up inside walls._",

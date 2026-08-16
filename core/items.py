@@ -60,6 +60,14 @@ ITEMS: dict[str, Item] = {
     ),
 }
 
+ITEMS["summoning_horn"] = Item(
+    key="summoning_horn",
+    name="Horn of the Absent Friend",
+    kind="summon",
+    price=0,
+    blurb="Blow it and somebody you know arrives, extremely confused.",
+)
+
 # One scroll per adventure, generated so adding an adventure adds its scroll.
 # Deliberately not stocked by the shop: a scroll is something you find.
 for _adv in ADVENTURES.values():

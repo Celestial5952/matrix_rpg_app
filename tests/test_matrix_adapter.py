@@ -301,11 +301,12 @@ def test_accepting_a_contract_opens_a_frame(editing_bot: Bot) -> None:
 def test_combat_turns_edit_the_frame_instead_of_posting(editing_bot: Bot) -> None:
     """A 20-turn fight used to be 20 messages in the room."""
     start_a_fight(editing_bot)
+    # Keep the fight going: a short contract can end inside five turns and
+    # then there are no combat frames left to count.
+    editing_bot.players["@player:srv"].character.run.encounter.hp = 9999
     editing_bot.client.sent.clear()
 
     for _ in range(5):
-        if not editing_bot.players["@player:srv"].in_combat:
-            break
         deliver(editing_bot, "!1")
 
     assert editing_bot.client.sent, "nothing was sent"

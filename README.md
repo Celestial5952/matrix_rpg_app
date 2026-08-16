@@ -301,9 +301,45 @@ name first because that is what people see in the room. It is the reason
 adventures are delivered as items: someone finds a scroll they are too low to
 read and can pass it to someone who isn't.
 
-Not built: parties, co-op, PvP, trading for gold. `Run` is 1:1 with
-`Character`, so shared-monster co-op needs a party that owns the encounter —
-a deliberate rewrite, not an extension.
+## Parties
+
+Several characters, one monster. A `Party` owns the contract, the stage, the
+shared `Encounter` and the RNG; each member keeps their **own** `Run` — their
+own HP, focus and ability uses. Only the monster is shared, because a shared
+health bar would make a party strictly a bigger solo character.
+
+`!party` starts one, `!invite` / `!join` fill it, up to four. The leader takes
+the contract for everyone. Members act in turn order and the monster answers
+once per **round**, targeting someone still standing. Monsters scale for the
+group: health close to linearly, power far more gently — a monster hitting
+`size` times harder would simply delete whoever it looked at, and being
+one-shot on somebody else's turn is not a fight you are playing.
+
+**Downing is not death.** A member on 0 HP is out of the fight and is carried
+out at the end of it. Only a total wipe kills, and it kills everyone — so a
+party is genuinely safer than going alone, which is the point of forming one,
+while permadeath keeps its teeth for the case where the whole plan fails.
+
+**The shield is structural, not a check.** Commands route by MXID to the
+sender's own state, so a player outside the party has no path to its
+`Encounter` at all — an outsider's fireball resolves against their own run or
+gets refused. `Parties` enforcing one party per player is what makes that
+guarantee hold. The bot says so explicitly rather than failing quietly.
+
+**The Horn of the Absent Friend** is the one thing that changes a roster
+mid-contract: an adventure reward that pulls somebody into a fight already in
+progress, including turning a solo fight into a party. The monster is *not*
+rescaled retroactively — arriving late is the whole advantage.
+
+Rounds are tracked by who has moved, not by a wrapping turn index. With an
+index, skipping a downed member reset it before it could wrap, so the monster
+never got a turn and a party could farm forever with one member down.
+
+Parties are in-memory only. A party run is shared state that cannot be restored
+per-member without forking one fight into several identical solo ones, so a
+restart ends party contracts and `persist` drops any run carrying a `party_key`.
+
+Not built: PvP, trading gold, parties surviving a restart.
 
 ## Characters and permadeath
 
