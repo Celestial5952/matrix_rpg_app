@@ -196,6 +196,40 @@ The kit self-heals on load: an entry naming an ability that is unknown, locked,
 or in the wrong slot silently falls back to the class default rather than
 raising. A save written before a rename must not brick the character.
 
+## Adventures
+
+The long-form content. An **adventure** is an authored sequence of encounters
+with story between them — ten chapters for the first one — opened by a **scroll**
+that drops from ordinary board work. Nothing about it is rolled: the monsters,
+their order and the prose are all written.
+
+Scrolls never drop from tier 1, appear on about **4%** of tier 2 contracts and
+**8%** of tier 3, and cannot be bought. Finding one is the board handing you a
+reason to go shopping, because consumables are the real budget across ten
+fights on one health bar.
+
+Adventures ride the ordinary `Contract` machinery — combat, persistence and
+rendering need no special cases. The only difference is that encounters come
+from `chapters` in order rather than being drawn from a pool. `Chapter.rest`
+grants HP before a fight so the curve has shape; ten encounters on one bar with
+no pacing is arithmetic, not difficulty.
+
+**Adding one is a data edit**, documented at the top of `adventures.py`: an
+`Adventure` with chapters, an intro and an epilogue. The scroll item and its
+drop entry are generated from the table.
+
+`tools/adventure.py` plays one headlessly and reports where runs actually end,
+which is the number worth reading:
+
+```bash
+python3 -m tools.adventure --runs 300 --level 5 --all-classes
+```
+
+The Sunless Ziggurat currently clears 35–88% at level 5 and 76–98% at level 7.
+Note the harness fights with **default loadouts**, so it understates every class
+whose armour-piercing option unlocks later — a real player will do better than
+these numbers.
+
 ## Bailing out
 
 `!portal` (also `!tp`, `!escape`, `!flee`) abandons a contract instantly. No
@@ -276,8 +310,10 @@ client; a 40-node skill constellation does not.
 - **Wizard is the weakest class** (36% on tier 3 at level 1 vs Fighter's 70%).
   Intended to be the high-risk pick, but that gap wants human playtesting, not
   more simulation
-- Story is one contract and a hook, not a campaign — there is no chain, no
-  state carried between story missions, and no ending
+- One adventure exists. There is no chain between them, no state carried from
+  one to the next, and no campaign arc
+- Rogue is the strongest class in the adventure (88% at level 5 vs Wizard's
+  36%) — Backstab piercing armour at 2 focus is a very strong level-1 kit
 - **Content runs out above level 5.** A level-5 party clears tier 3 at 77–97%,
   so the Barrow Door stops being frightening well before level 8. That is a
   content gap, not a systems one — `content.py` needs tier 4+

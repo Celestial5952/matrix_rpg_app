@@ -16,6 +16,7 @@ import json
 import logging
 from pathlib import Path
 
+from .adventures import ADVENTURES, contract_for
 from .chargen import CLASSES_BY_KEY, RACES_BY_KEY, SLOTS
 from .content import MODIFIERS_BY_KEY, MONSTERS, QUESTS_BY_KEY, scaled_monster
 from .items import ITEMS
@@ -140,6 +141,7 @@ def _tombstones_from(rows: object) -> list[Tombstone]:
 def _contract_to_dict(c: Contract) -> dict:
     return {
         "quest": c.quest.key,
+        "adventure": c.adventure_key,
         "name": c.name, "tier": c.tier, "flavor": c.flavor,
         "pool": list(c.pool), "stages": c.stages,
         "gold": c.gold, "renown": c.renown, "story": c.story,
@@ -150,6 +152,17 @@ def _contract_to_dict(c: Contract) -> dict:
 def _contract_from_dict(d: object) -> Contract | None:
     if not isinstance(d, dict):
         return None
+
+    # Adventures are rebuilt wholesale from the table rather than from the
+    # saved row: the chapters are authored content, and reconstructing prose
+    # from a save would let an edited adventure resume with stale text.
+    adventure_key = d.get("adventure")
+    if adventure_key:
+        adventure = ADVENTURES.get(adventure_key)
+        if adventure is None:
+            return None  # adventure removed from the game
+        return contract_for(adventure)
+
     quest = QUESTS_BY_KEY.get(d.get("quest"))
     if quest is None:
         return None  # template deleted from content.py

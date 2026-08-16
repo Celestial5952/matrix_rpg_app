@@ -22,6 +22,7 @@ import difflib
 import random
 
 from . import combat
+from .adventures import ADVENTURES, contract_for
 from .chargen import (
     CLASSES,
     MAX_LEVEL,
@@ -42,6 +43,8 @@ from .content import (
     roll_contract,
     story_quests,
 )
+from dataclasses import replace as _replace
+
 from .items import ITEMS, SHOP_STOCK, match_items, roll_loot
 from .state import (
     MAX_NAME,
@@ -477,6 +480,30 @@ def roll_board(char: Character, rng: random.Random | None = None) -> None:
     char.board = [roll_contract(q, rng) for q in picks]
 
 
+def _spawn_chapter(run, index: int):
+    """Spawn the monster for chapter `index`, with that chapter's modifiers.
+
+    Chapter modifiers stack on top of the contract's, so a chapter can be made
+    harder without the whole adventure carrying the modifier.
+    """
+    chapter = run.quest.chapters[index]
+    scaled = _replace(run.quest,
+                      modifiers=run.quest.modifiers + chapter.modifiers)
+    return combat.spawn(chapter.monster, run.rng, scaled)
+
+
+def _chapter_opening(run, index: int) -> list[str]:
+    """Story before a chapter's fight, plus any breather it grants."""
+    chapter = run.quest.chapters[index]
+    lines = ["", chapter.beat]
+    if chapter.rest:
+        healed = min(chapter.rest, run.max_hp - run.hp)
+        run.hp += healed
+        if healed:
+            lines.append(f"_You take a moment. **+{healed}** HP._")
+    return lines
+
+
 def start_run(char: Character, quest, seed: int | None = None) -> list[str]:
     rng = random.Random(seed)
     run = Run(
@@ -490,8 +517,22 @@ def start_run(char: Character, quest, seed: int | None = None) -> list[str]:
         uses={a.key: a.uses for a in char.abilities if a.uses is not None},
         rng=rng,
     )
-    run.encounter = combat.spawn(rng.choice(quest.pool), rng, quest)
     char.run = run
+
+    if quest.is_adventure:
+        run.encounter = _spawn_chapter(run, 0)
+        return [
+            f"🌀 **{quest.name}**",
+            "",
+            quest.flavor,
+            *_chapter_opening(run, 0),
+            "",
+            f"_Chapter 1 of {quest.stages}._",
+            "",
+            *render_combat(char),
+        ]
+
+    run.encounter = combat.spawn(rng.choice(quest.pool), rng, quest)
     return [
         f"**{quest.name}**",
         f"_{quest.flavor}_",
@@ -520,14 +561,23 @@ def _advance_after_kill(char: Character) -> list[str]:
             f"🎉 **CONTRACT COMPLETE — {run.quest.name}** 🎉",
             f"**+{run.quest.gold}** gold · **+{run.quest.renown}** renown. _Not bad, hero._",
         ]
-        drops = roll_loot(run.quest.tier, run.rng)
-        for _ in range(run.quest.extra_loot):
-            drops += roll_loot(run.quest.tier, run.rng)
+        adventure = ADVENTURES.get(run.quest.adventure_key)
+        if adventure is not None:
+            drops = list(adventure.rewards)
+            final = run.quest.chapters[-1]
+            if final.aftermath:
+                lines[1:1] = ["", final.aftermath]
+            lines += ["", adventure.epilogue]
+        else:
+            drops = roll_loot(run.quest.tier, run.rng)
+            for _ in range(run.quest.extra_loot):
+                drops += roll_loot(run.quest.tier, run.rng)
         for key in drops:
             char.inventory[key] = char.inventory.get(key, 0) + 1
         if drops:
-            names = " · ".join(ITEMS[k].name for k in drops)
-            lines.append(f"💰 _Rifled from the fallen:_ **{names}**.")
+            names = " · ".join(ITEMS[k].name for k in drops if k in ITEMS)
+            if names:
+                lines.append(f"💰 _Rifled from the fallen:_ **{names}**.")
         else:
             lines.append("_Nothing worth carrying home. Not even a nice button._")
         if char.level > old_level:
@@ -549,6 +599,18 @@ def _advance_after_kill(char: Character) -> list[str]:
         lines.append("")
         lines.append("_Back to the hall, boots muddy, story ready._ `!board`")
         return lines
+
+    if run.quest.is_adventure:
+        previous = run.quest.chapters[run.stage - 1]
+        run.encounter = _spawn_chapter(run, run.stage)
+        return [
+            *(["", previous.aftermath] if previous.aftermath else []),
+            *_chapter_opening(run, run.stage),
+            "",
+            f"_Chapter {run.stage + 1} of {run.quest.stages}._",
+            "",
+            *render_combat(char),
+        ]
 
     run.encounter = combat.spawn(run.rng.choice(run.quest.pool), run.rng,
                                  run.quest)
@@ -742,8 +804,7 @@ def handle(player: Player, text: str,
         return render_inventory(char)
 
     if word == "use":
-        return ["Nothing to use — you're not in a fight.",
-                "Items are for when it's going badly. `!bag` to see what you have."]
+        return _use_in_hall(char, parts[1:])
 
     if word in ("status", "me", "char", "sheet"):
         return render_character(char)
@@ -864,6 +925,47 @@ def _buy(char: Character, args: list[str]) -> list[str]:
     ]
 
 
+def _use_in_hall(char: Character, args: list[str]) -> list[str]:
+    """Only scrolls work outside a fight — everything else is for emergencies."""
+    if not args:
+        return ["Use what? Scrolls work here; everything else is for a fight.",
+                "", *render_inventory(char)]
+
+    carried = sorted(char.inventory)
+    matches = match_items(args[0], carried)
+    if not matches:
+        return [f"You're not carrying '{args[0]}'.", "", *render_inventory(char)]
+    if len(matches) > 1:
+        return ["Which one? " + " · ".join(m.name for m in matches)]
+
+    item = matches[0]
+    if item.kind != "scroll":
+        return [f"**{item.name}** is for when it's going badly, not for "
+                "standing about in a guild hall.",
+                "_Take a contract first._ `!board`"]
+
+    adventure = ADVENTURES.get(item.adventure)
+    if adventure is None:
+        return [f"**{item.name}** unrolls into nonsense. Whatever it led to "
+                "isn't there any more."]
+
+    if char.level < adventure.min_level:
+        return [
+            f"📜 _You unroll the **{item.name}**. The script squirms away from "
+            "your eye and will not hold still._",
+            "",
+            f"**{adventure.title}** needs level **{adventure.min_level}**. "
+            f"You are level **{char.level}**.",
+            "_Come back when you've grown into it._",
+        ]
+
+    char.inventory[item.key] = char.inventory.get(item.key, 0) - 1
+    if char.inventory[item.key] <= 0:
+        del char.inventory[item.key]
+
+    return start_run(char, contract_for(adventure))
+
+
 def _use(char: Character, args: list[str], player: Player) -> list[str]:
     """Spend an item. Costs the turn, so the monster answers."""
     if not char.inventory:
@@ -880,6 +982,10 @@ def _use(char: Character, args: list[str], player: Player) -> list[str]:
     if len(matches) > 1:
         return [f"Which one? " + " · ".join(m.name for m in matches)]
     item = matches[0]
+    if item.kind == "scroll":
+        return ["Not mid-fight. _Reading a teleport scroll with something "
+                "chewing on you is how people end up inside walls._",
+                "", *render_combat(char)]
 
     # Refuse rather than silently burn a single-use item for no effect.
     run = char.run

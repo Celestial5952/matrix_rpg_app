@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import random
 
+from .adventures import ADVENTURES
 from .state import Item
 
 ITEMS: dict[str, Item] = {
@@ -59,6 +60,22 @@ ITEMS: dict[str, Item] = {
     ),
 }
 
+# One scroll per adventure, generated so adding an adventure adds its scroll.
+# Deliberately not stocked by the shop: a scroll is something you find.
+for _adv in ADVENTURES.values():
+    ITEMS[f"scroll_{_adv.key}"] = Item(
+        key=f"scroll_{_adv.key}",
+        name=_adv.scroll_name,
+        kind="scroll",
+        price=0,
+        blurb=_adv.scroll_blurb,
+        adventure=_adv.key,
+    )
+
+SCROLL_KEYS: tuple[str, ...] = tuple(
+    k for k, v in ITEMS.items() if v.kind == "scroll"
+)
+
 # What the guild hall stocks, in display order.
 SHOP_STOCK: tuple[str, ...] = (
     "lesser_potion",
@@ -95,6 +112,18 @@ LOOT_TABLES: dict[int, tuple[int, tuple[tuple[str | None, int], ...]]] = {
 }
 
 
+# Scrolls roll independently of the ordinary loot table, so the rate stays
+# legible instead of drifting every time an item is added to a tier. Tier 1
+# never drops one: an adventure should arrive as a reward for real work.
+SCROLL_CHANCE: dict[int, float] = {2: 0.04, 3: 0.08}
+
+
+def roll_scroll(tier: int, rng: random.Random) -> str | None:
+    if not SCROLL_KEYS or rng.random() >= SCROLL_CHANCE.get(tier, 0.0):
+        return None
+    return rng.choice(SCROLL_KEYS)
+
+
 def roll_loot(tier: int, rng: random.Random) -> list[str]:
     """Item keys dropped by a completed contract of this tier."""
     rolls, table = LOOT_TABLES.get(tier, LOOT_TABLES[1])
@@ -105,6 +134,10 @@ def roll_loot(tier: int, rng: random.Random) -> list[str]:
         pick = rng.choices(keys, weights=weights, k=1)[0]
         if pick is not None:
             drops.append(pick)
+
+    scroll = roll_scroll(tier, rng)
+    if scroll is not None:
+        drops.append(scroll)
     return drops
 
 

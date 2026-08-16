@@ -93,6 +93,91 @@ MONSTERS: dict[str, Monster] = {
                         kind="heavy", multiplier=2.1),
         ),
     ),
+    # --- adventure beasts ---------------------------------------------------
+    # Tuned for the fixed sequences in adventures.py, not for the random board.
+    "tomb_spider": Monster(
+        key="tomb_spider", name="Tomb Spider", max_hp=30, power=7, armor=1,
+        moves=(
+            MonsterMove("Bite", "The spider tastes the air with a foreleg."),
+            MonsterMove("Web", "The spider draws silk between the pillars.",
+                        kind="guard"),
+            MonsterMove("Pounce", "Every leg tenses at once.",
+                        kind="heavy", multiplier=1.9),
+        ),
+    ),
+    "grave_ooze": Monster(
+        key="grave_ooze", name="Grave Ooze", max_hp=46, power=6, armor=0,
+        moves=(
+            MonsterMove("Engulf", "The ooze slides forward, unhurried.",
+                        kind="drain"),
+            MonsterMove("Congeal", "The ooze thickens until it shines.",
+                        kind="guard"),
+            MonsterMove("Break", "The ooze rears into a column above you.",
+                        kind="heavy", multiplier=1.8),
+        ),
+    ),
+    "stone_sentinel": Monster(
+        key="stone_sentinel", name="Stone Sentinel", max_hp=42, power=7, armor=3,
+        moves=(
+            MonsterMove("Backhand", "The statue's head turns. Only the head."),
+            MonsterMove("Brace", "The sentinel plants itself and waits.",
+                        kind="guard"),
+            MonsterMove("Hammerfall", "It raises both fists above its head.",
+                        kind="heavy", multiplier=2.1),
+        ),
+    ),
+    "bone_choir": Monster(
+        key="bone_choir", name="Bone Choir", max_hp=40, power=8, armor=1,
+        moves=(
+            MonsterMove("Descant", "A dozen jaws open on the same note."),
+            MonsterMove("Antiphon", "The singing doubles back on itself.",
+                        kind="drain"),
+            MonsterMove("Crescendo", "The note climbs past what bone should hold.",
+                        kind="heavy", multiplier=2.0),
+        ),
+    ),
+    "basilisk": Monster(
+        key="basilisk", name="Basilisk", max_hp=48, power=8, armor=3,
+        moves=(
+            MonsterMove("Rake", "The basilisk drags one claw across the flagstones."),
+            MonsterMove("Coil", "It folds itself behind its own plates.",
+                        kind="guard"),
+            MonsterMove("Regard", "The basilisk turns its head to look at you properly.",
+                        kind="heavy", multiplier=2.2),
+        ),
+    ),
+    "wyvern": Monster(
+        key="wyvern", name="Cavern Wyvern", max_hp=52, power=9, armor=2,
+        moves=(
+            MonsterMove("Snap", "The wyvern shifts its wings for balance."),
+            MonsterMove("Sting", "The tail comes up over the shoulder, dripping.",
+                        kind="heavy", multiplier=2.1),
+            MonsterMove("Mantle", "It pulls both wings across itself like a cloak.",
+                        kind="guard"),
+        ),
+    ),
+    "ziggurat_warden": Monster(
+        key="ziggurat_warden", name="Warden of the Ziggurat", max_hp=58,
+        power=9, armor=2,
+        moves=(
+            MonsterMove("Judgement", "The warden lifts its blade to the vertical."),
+            MonsterMove("Sanctify", "Old wards flare along its arms.", kind="guard"),
+            MonsterMove("Sentence", "It speaks a name. You are almost certain it is yours.",
+                        kind="heavy", multiplier=2.3),
+        ),
+    ),
+    "dread_wyrm": Monster(
+        key="dread_wyrm", name="The Sleeper", max_hp=78, power=10, armor=2,
+        moves=(
+            MonsterMove("Claw", "Something vast adjusts its weight in the dark."),
+            MonsterMove("Siphon", "The air pulls towards it, and so does your warmth.",
+                        kind="drain"),
+            MonsterMove("Coil", "Scales grind closed over the old wound.",
+                        kind="guard"),
+            MonsterMove("Ruin", "It inhales. The whole chamber leans in with it.",
+                        kind="heavy", multiplier=2.4),
+        ),
+    ),
 }
 
 # ---------------------------------------------------------------------------

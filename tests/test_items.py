@@ -102,7 +102,7 @@ def test_use_outside_combat_is_refused_not_silent():
     player = armed(gold=50)
     handle(player, "!buy 1")
     reply = handle(player, "!use lesser")
-    assert "not in a fight" in " ".join(reply).lower()
+    assert "guild hall" in " ".join(reply).lower()
     assert player.character.inventory["lesser_potion"] == 1
 
 

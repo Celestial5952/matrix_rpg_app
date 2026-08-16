@@ -74,6 +74,8 @@ class Item:
     kind: str
     price: int
     blurb: str = ""
+    # Set on kind="scroll": the adventure this scroll opens.
+    adventure: str = ""
     heal: int = 0
     focus: int = 0
     damage: int = 0
@@ -165,6 +167,42 @@ class Quest:
 
 
 @dataclass(frozen=True)
+class Chapter:
+    """One encounter in an adventure, with the story around it.
+
+    `rest` restores HP before the fight — a narrative breather. Ten encounters
+    on one health bar with no pacing is not difficulty, it is arithmetic.
+    """
+
+    beat: str
+    monster: str
+    aftermath: str = ""
+    rest: int = 0
+    modifiers: tuple[Modifier, ...] = ()
+
+
+@dataclass(frozen=True)
+class Adventure:
+    """A fixed, authored sequence of encounters, delivered by a scroll."""
+
+    key: str
+    title: str
+    scroll_name: str
+    scroll_blurb: str
+    intro: str
+    chapters: tuple[Chapter, ...]
+    epilogue: str
+    gold: int
+    renown: int
+    rewards: tuple[str, ...] = ()
+    min_level: int = 1
+
+    @property
+    def length(self) -> int:
+        return len(self.chapters)
+
+
+@dataclass(frozen=True)
 class Contract:
     """One rolled instance of a Quest, as posted on the board.
 
@@ -183,10 +221,18 @@ class Contract:
     renown: int
     modifiers: tuple[Modifier, ...] = ()
     story: bool = False
+    # Set for adventures. When present, encounters come from this fixed
+    # sequence rather than being drawn at random from `pool`.
+    chapters: tuple[Chapter, ...] = ()
+    adventure_key: str = ""
 
     @property
     def key(self) -> str:
         return self.quest.key
+
+    @property
+    def is_adventure(self) -> bool:
+        return bool(self.chapters)
 
     @property
     def monster_hp_mult(self) -> float:
