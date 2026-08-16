@@ -67,17 +67,25 @@ trusting a figure written down here.
 
 ## How a fight looks in the room
 
-A fight is **one message that edits itself**. Each turn rewrites it in place via
-`m.replace` rather than posting again — a 20-turn contract used to be 20
-messages scrolling the hall. The outcome (death, contract complete, flee) is
-posted as its own message in a **thread** off that frame, so the beats worth
-keeping persist while the main timeline stays at one message per contract.
+`MATRIX_COMBAT_STYLE` picks between two displays.
 
-If an edit fails — the event is gone, or a restart lost the id — the bot posts
-a fresh frame instead. Losing an edit must never cost a player their turn.
+**`post` (default)** — every turn is its own message, nothing removed,
+everything in the main timeline. The full blow-by-blow scrolls like a normal
+conversation and the newest state is always at the bottom.
 
-Frame ids are deliberately not persisted. After a restart the next turn simply
-opens a new frame.
+**`edit`** — one message per fight, rewritten in place via `m.replace`, with
+outcomes threaded off it. Far quieter in a shared room: a 20-turn contract is
+one message instead of twenty.
+
+`edit` was the original default and lost a playtest. The frame sits *above* the
+player's own commands, so every `!1` pushes it further up the screen — on a
+phone you end up scrolling back to read the result of the thing you just typed.
+Tidiness in the room is not worth that. It is kept as an option because in a
+busy shared hall the tradeoff may flip.
+
+In `edit` mode, a failed edit falls back to posting a fresh frame — losing an
+edit must never cost a player their turn — and frame ids are deliberately not
+persisted, so a restart simply opens a new frame.
 
 ## Nothing prefixed is ever answered with silence
 

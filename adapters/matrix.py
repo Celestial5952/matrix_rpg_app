@@ -96,6 +96,18 @@ class Bot:
         self.players_path = state_dir / "players.json"
         self.sync_token_path = state_dir / "sync_token"
 
+        # "post" -- every turn is its own message, nothing removed, everything
+        # in the main timeline. Chosen because the edited frame drifts upward
+        # on mobile as your own commands stack below it, so you end up
+        # scrolling back to read the result of what you just typed.
+        # "edit" -- one message per fight, rewritten in place via m.replace,
+        # with outcomes threaded off it. Quieter in a shared room.
+        self.combat_style = os.environ.get("MATRIX_COMBAT_STYLE", "post").lower()
+        if self.combat_style not in ("post", "edit"):
+            log.warning("unknown MATRIX_COMBAT_STYLE %r, using 'post'",
+                        self.combat_style)
+            self.combat_style = "post"
+
         self.players: dict[str, Player] = load_all(self.players_path)
         # mxid -> {"root": event_id, "frame": event_id}. A fight is one message
         # in the room that we keep editing; outcomes go in a thread off it.
@@ -213,6 +225,10 @@ class Bot:
     async def _deliver(self, player: Player, lines: list[str],
                        was_fighting: bool) -> None:
         """Decide whether this reply opens, updates, or closes a fight frame."""
+        if self.combat_style == "post":
+            await self._send(lines)
+            return
+
         mxid = player.mxid
         fighting = player.in_combat
         fight = self.fights.get(mxid)

@@ -136,6 +136,13 @@ def bot(tmp_path, monkeypatch) -> Bot:
     return b
 
 
+@pytest.fixture
+def editing_bot(bot: Bot) -> Bot:
+    """The optional one-message-per-fight display."""
+    bot.combat_style = "edit"
+    return bot
+
+
 def deliver(bot: Bot, body: str, sender: str = "@player:srv", ts: int | None = None):
     asyncio.run(bot.on_message(FakeRoom(ROOM), FakeEvent(sender, body, ts)))
 
@@ -285,34 +292,34 @@ def test_ordinary_replies_are_plain_messages(bot: Bot) -> None:
     assert not is_threaded(bot.client.sent[-1])
 
 
-def test_accepting_a_contract_opens_a_frame(bot: Bot) -> None:
-    start_a_fight(bot)
-    assert not is_edit(bot.client.sent[-1]), "the first frame is a new message"
-    assert "@player:srv" in bot.fights
+def test_accepting_a_contract_opens_a_frame(editing_bot: Bot) -> None:
+    start_a_fight(editing_bot)
+    assert not is_edit(editing_bot.client.sent[-1]), "the first frame is a new message"
+    assert "@player:srv" in editing_bot.fights
 
 
-def test_combat_turns_edit_the_frame_instead_of_posting(bot: Bot) -> None:
+def test_combat_turns_edit_the_frame_instead_of_posting(editing_bot: Bot) -> None:
     """A 20-turn fight used to be 20 messages in the room."""
-    start_a_fight(bot)
-    bot.client.sent.clear()
+    start_a_fight(editing_bot)
+    editing_bot.client.sent.clear()
 
     for _ in range(5):
-        if not bot.players["@player:srv"].in_combat:
+        if not editing_bot.players["@player:srv"].in_combat:
             break
-        deliver(bot, "!1")
+        deliver(editing_bot, "!1")
 
-    assert bot.client.sent, "nothing was sent"
-    edits = [c for c in bot.client.sent if is_edit(c)]
+    assert editing_bot.client.sent, "nothing was sent"
+    edits = [c for c in editing_bot.client.sent if is_edit(c)]
     assert len(edits) >= 3, "combat turns should edit, not accumulate messages"
 
 
-def test_an_edit_carries_new_content_and_targets_the_frame(bot: Bot) -> None:
-    start_a_fight(bot)
-    frame = bot.fights["@player:srv"]["frame"]
-    bot.client.sent.clear()
-    deliver(bot, "!1")
+def test_an_edit_carries_new_content_and_targets_the_frame(editing_bot: Bot) -> None:
+    start_a_fight(editing_bot)
+    frame = editing_bot.fights["@player:srv"]["frame"]
+    editing_bot.client.sent.clear()
+    deliver(editing_bot, "!1")
 
-    edit = bot.client.sent[0]
+    edit = editing_bot.client.sent[0]
     assert relation(edit)["event_id"] == frame
     assert edit["m.new_content"]["msgtype"] == "m.notice"
     # The fallback is the new content with an edit marker prepended -- asserting
@@ -321,35 +328,35 @@ def test_an_edit_carries_new_content_and_targets_the_frame(bot: Bot) -> None:
     assert edit["formatted_body"] == "* " + edit["m.new_content"]["formatted_body"]
 
 
-def test_the_end_of_a_fight_is_posted_in_the_thread(bot: Bot) -> None:
-    start_a_fight(bot)
-    root = bot.fights["@player:srv"]["root"]
-    bot.client.sent.clear()
+def test_the_end_of_a_fight_is_posted_in_the_thread(editing_bot: Bot) -> None:
+    start_a_fight(editing_bot)
+    root = editing_bot.fights["@player:srv"]["root"]
+    editing_bot.client.sent.clear()
 
-    deliver(bot, "!flee")
-    last = bot.client.sent[-1]
+    deliver(editing_bot, "!flee")
+    last = editing_bot.client.sent[-1]
     assert is_threaded(last)
     assert relation(last)["event_id"] == root
-    assert "@player:srv" not in bot.fights, "the frame should be released"
+    assert "@player:srv" not in editing_bot.fights, "the frame should be released"
 
 
-def test_a_failed_edit_falls_back_to_a_new_message(bot: Bot) -> None:
+def test_a_failed_edit_falls_back_to_a_new_message(editing_bot: Bot) -> None:
     """Losing an edit must never cost the player their turn."""
-    start_a_fight(bot)
-    bot.client.sent.clear()
-    bot.client.responses = [RoomSendError.from_dict(
+    start_a_fight(editing_bot)
+    editing_bot.client.sent.clear()
+    editing_bot.client.responses = [RoomSendError.from_dict(
         {"errcode": "M_FORBIDDEN", "error": "nope"}, ROOM)]
 
-    deliver(bot, "!1")
-    assert len(bot.client.sent) == 2, "should retry as a fresh message"
-    assert is_edit(bot.client.sent[0])
-    assert not is_edit(bot.client.sent[1])
+    deliver(editing_bot, "!1")
+    assert len(editing_bot.client.sent) == 2, "should retry as a fresh message"
+    assert is_edit(editing_bot.client.sent[0])
+    assert not is_edit(editing_bot.client.sent[1])
 
 
-def test_two_players_get_their_own_frames(bot: Bot) -> None:
-    start_a_fight(bot, "@a:srv")
-    start_a_fight(bot, "@b:srv")
-    assert bot.fights["@a:srv"]["frame"] != bot.fights["@b:srv"]["frame"]
+def test_two_players_get_their_own_frames(editing_bot: Bot) -> None:
+    start_a_fight(editing_bot, "@a:srv")
+    start_a_fight(editing_bot, "@b:srv")
+    assert editing_bot.fights["@a:srv"]["frame"] != editing_bot.fights["@b:srv"]["frame"]
 
 
 def test_a_display_name_is_never_stored_as_a_raw_mxid(bot: Bot) -> None:
@@ -359,3 +366,38 @@ def test_a_display_name_is_never_stored_as_a_raw_mxid(bot: Bot) -> None:
 
     asyncio.run(bot.on_message(Anonymous(ROOM), FakeEvent("@a:srv", "!help")))
     assert bot.players["@a:srv"].display_name == "a"
+
+
+# --- default display: a message per turn -----------------------------------
+
+def test_default_style_posts_a_message_per_turn(bot: Bot) -> None:
+    """The chosen default: full scrollback, always at the bottom of the room."""
+    assert bot.combat_style == "post"
+    start_a_fight(bot)
+    bot.client.sent.clear()
+
+    turns = 0
+    for _ in range(4):
+        if not bot.players["@player:srv"].in_combat:
+            break
+        deliver(bot, "!1")
+        turns += 1
+
+    assert len(bot.client.sent) == turns, "each turn should be its own message"
+    assert not any(is_edit(c) for c in bot.client.sent)
+    assert not any(is_threaded(c) for c in bot.client.sent)
+
+
+def test_default_style_keeps_no_frame_state(bot: Bot) -> None:
+    start_a_fight(bot)
+    assert bot.fights == {}, "nothing to track when every turn is a new message"
+
+
+def test_an_unknown_style_falls_back_to_post(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MATRIX_HOMESERVER", "https://srv")
+    monkeypatch.setenv("MATRIX_USER", "@bot:srv")
+    monkeypatch.setenv("MATRIX_ROOM_ID", ROOM)
+    monkeypatch.setenv("MATRIX_PASSWORD", "hunter2")
+    monkeypatch.setenv("MATRIX_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("MATRIX_COMBAT_STYLE", "interpretive-dance")
+    assert Bot().combat_style == "post"
