@@ -23,15 +23,32 @@ pip install -r requirements.txt
 export MATRIX_HOMESERVER=https://matrix.example.org
 export MATRIX_USER=@guildbot:example.org
 export MATRIX_PASSWORD=...        # or MATRIX_TOKEN=... for an existing access token
-export MATRIX_ROOM_ID='!abc123:example.org'
+export MATRIX_ROOM_ID='#guildhall:example.org'   # alias or !internal:id both work
 
 python3 -m adapters.matrix
 ```
+
+Invite the bot to the room first — an unjoined bot syncs happily and receives
+nothing, so the adapter treats a failed join as fatal rather than letting it
+look like "online but ignoring me". Point it at a **room**, not a space: a
+space is a room, but nobody talks in it.
 
 Player meta-state (renown, gold, rank, deaths) and the sync token persist to
 `MATRIX_STATE_DIR` (default `store/`, already gitignored). An in-progress
 fight is not persisted — restart mid-encounter and that one run is lost, same
 as a `flee`.
+
+## Tests
+
+```bash
+pip install pytest && python3 -m pytest
+```
+
+87 tests, no homeserver required — the adapter is exercised against a stub
+client. They cover combat invariants (fireball ignores armour, guard reduces
+damage, seeded runs replay identically), the routing rules that decide whether
+the bot speaks at all, persistence round-trips and corrupt-file recovery, and
+the adapter's own resilience paths.
 
 ## Design decisions already settled
 
@@ -66,6 +83,7 @@ play.py        offline playtest REPL
 adapters/
   matrix.py    sync loop, event -> handle(), lines -> m.room.message — the
                only file that knows Matrix exists
+tests/         pytest suite; no homeserver required
 ```
 
 ## Combat model
@@ -89,13 +107,15 @@ client; a 40-node skill constellation does not.
 
 ## Known gaps
 
-- No tests
+- **Never run against a real homeserver yet.** The adapter is covered by tests
+  against a stub client, which is not the same as proven.
 - Persistence covers Player meta-state only — an in-progress run doesn't
   survive a restart
 - Balance is first-draft and unplaytested beyond a few fights
 - The adapter's markdown → HTML rendering only understands `**bold**`,
   `_italic_`, `` `code` `` — enough for current game text, not a general
   renderer
+- One room per process; no multi-room or per-space routing
 
 ## Matrix gotchas the adapter handles
 
@@ -107,5 +127,10 @@ client; a 40-node skill constellation does not.
   bot's own MXID, so command-shaped bot output can't loop.
 - **Key everything on MXID**, never display name — `Player` is keyed and
   persisted by MXID; display name is cosmetic only.
-- **Rate limits** — Tuwunel will throttle a chatty bot. Raise limits for the
-  bot user rather than adding sleeps; the adapter doesn't add any.
+- **Rate limits** — Tuwunel will throttle a chatty bot. The adapter adds no
+  sleeps of its own, but it does honour a 429's `retry_after_ms` for up to
+  three attempts rather than silently dropping a reply, and logs a line
+  telling you to raise the limit for the bot user when it happens.
+- **A thrown exception mid-command** would otherwise kill the sync loop for
+  everyone in the room, so `handle()` is wrapped: the player gets told
+  something broke, the traceback goes to the log, the bot stays up.

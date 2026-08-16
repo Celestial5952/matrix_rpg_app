@@ -33,9 +33,13 @@ from pathlib import Path
 from nio import (
     AsyncClient,
     AsyncClientConfig,
+    JoinError,
     LoginResponse,
     MatrixRoom,
     RoomMessageText,
+    RoomResolveAliasResponse,
+    RoomSendError,
+    SyncError,
     SyncResponse,
     WhoamiResponse,
 )
@@ -53,6 +57,13 @@ log = logging.getLogger("guildhall.matrix")
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
 _ITALIC = re.compile(r"(?<!\w)_(.+?)_(?!\w)")
 _CODE = re.compile(r"`(.+?)`")
+
+# A 429 is the server telling us to slow down, so honour its retry_after_ms
+# rather than dropping the reply. This is not the same as adding sleeps to
+# throttle ourselves (see README) — the fix for sustained throttling is still
+# raising the bot user's rate limit, and the log line below says so.
+MAX_SEND_ATTEMPTS = 3
+MAX_RETRY_WAIT = 10.0  # seconds; ignore an absurd retry_after and give up
 
 
 def _to_html(line: str) -> str:
@@ -93,12 +104,16 @@ class Bot:
         self.client = AsyncClient(self.homeserver, self.user, config=config)
         self.client.add_event_callback(self.on_message, RoomMessageText)
         self.client.add_response_callback(self.on_sync, SyncResponse)
+        self.client.add_response_callback(self.on_sync_error, SyncError)
 
     def _player(self, mxid: str, display_name: str) -> Player:
         player = self.players.get(mxid)
         if player is None:
             player = Player(mxid=mxid, name=display_name)
             self.players[mxid] = player
+        elif display_name and player.name != display_name:
+            # Identity is the MXID; the name is cosmetic, so track renames.
+            player.name = display_name
         return player
 
     async def on_message(self, room: MatrixRoom, event: RoomMessageText) -> None:
@@ -115,27 +130,71 @@ class Bot:
 
         name = room.user_name(event.sender) or event.sender
         player = self._player(event.sender, name)
-        reply = handle(player, event.body)
+
+        # One malformed command must not kill the sync loop. Without this, an
+        # unhandled exception in game logic takes the bot down for everyone.
+        try:
+            reply = handle(player, event.body)
+        except Exception:
+            log.exception("handle() raised on %r from %s", event.body, event.sender)
+            await self._send(["Something went wrong resolving that. "
+                              "The error is in the bot log."])
+            return
+
         if reply is None:
             return
 
-        save_all(self.players_path, self.players)
+        try:
+            save_all(self.players_path, self.players)
+        except OSError:
+            # Losing a save is survivable; refusing to reply is not.
+            log.exception("could not persist players to %s", self.players_path)
 
-        plain = "\n".join(reply)
-        html = "<br>".join(_to_html(line) for line in reply)
-        await self.client.room_send(
-            room_id=self.room_id,
-            message_type="m.room.message",
-            content={
-                "msgtype": "m.notice",
-                "body": plain,
-                "format": "org.matrix.custom.html",
-                "formatted_body": html,
-            },
-        )
+        await self._send(reply)
+
+    async def _send(self, lines: list[str]) -> None:
+        """Send one message, retrying only when the server asks us to."""
+        content = {
+            "msgtype": "m.notice",
+            "body": "\n".join(lines),
+            "format": "org.matrix.custom.html",
+            "formatted_body": "<br>".join(_to_html(line) for line in lines),
+        }
+        for attempt in range(1, MAX_SEND_ATTEMPTS + 1):
+            resp = await self.client.room_send(
+                room_id=self.room_id,
+                message_type="m.room.message",
+                content=content,
+            )
+            if not isinstance(resp, RoomSendError):
+                return
+
+            if resp.status_code != "M_LIMIT_EXCEEDED":
+                log.error("send failed (%s): %s", resp.status_code, resp.message)
+                return
+
+            wait = min((resp.retry_after_ms or 1000) / 1000, MAX_RETRY_WAIT)
+            log.warning(
+                "rate limited (attempt %d/%d), waiting %.1fs — raise the rate "
+                "limit for %s on the homeserver if this is frequent",
+                attempt, MAX_SEND_ATTEMPTS, wait, self.client.user_id,
+            )
+            if attempt < MAX_SEND_ATTEMPTS:
+                await asyncio.sleep(wait)
+
+        log.error("giving up on a reply after %d rate-limited attempts",
+                  MAX_SEND_ATTEMPTS)
 
     async def on_sync(self, response: SyncResponse) -> None:
-        self.sync_token_path.write_text(response.next_batch)
+        try:
+            self.sync_token_path.write_text(response.next_batch)
+        except OSError:
+            # Non-fatal, but worth shouting about: without a persisted token the
+            # next cold start falls back to the timestamp guard for backfill.
+            log.exception("could not persist sync token to %s", self.sync_token_path)
+
+    async def on_sync_error(self, response: SyncError) -> None:
+        log.error("sync error (%s): %s", response.status_code, response.message)
 
     async def login(self) -> None:
         if self.token:
@@ -150,8 +209,27 @@ class Bot:
             if not isinstance(resp, LoginResponse):
                 raise SystemExit(f"login failed: {resp}")
 
-        # Idempotent — succeeds quietly if the bot is already in the room.
-        await self.client.join(self.room_id)
+        # Accept a #alias:server as well as a !roomid:server — the alias is what
+        # a human can actually read off their client.
+        if self.room_id.startswith("#"):
+            resolved = await self.client.room_resolve_alias(self.room_id)
+            if not isinstance(resolved, RoomResolveAliasResponse):
+                raise SystemExit(
+                    f"could not resolve alias {self.room_id}: {resolved.message}"
+                )
+            log.info("resolved %s -> %s", self.room_id, resolved.room_id)
+            self.room_id = resolved.room_id
+
+        # Idempotent — succeeds quietly if the bot is already in the room. A
+        # failure here is fatal on purpose: an unjoined bot syncs happily and
+        # receives nothing, which looks like "online but ignoring me".
+        joined = await self.client.join(self.room_id)
+        if isinstance(joined, JoinError):
+            raise SystemExit(
+                f"could not join {self.room_id}: {joined.message}\n"
+                "Invite the bot to the room first, and check MATRIX_ROOM_ID is "
+                "the internal ID (!abc:server), not the #alias:server."
+            )
 
     async def run(self) -> None:
         await self.login()

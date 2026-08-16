@@ -1,1 +1,4 @@
 matrix-nio>=0.24
+
+# tests
+pytest>=7
