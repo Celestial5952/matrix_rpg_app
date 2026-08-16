@@ -1,12 +1,14 @@
-"""Intent dispatch and the guild-hall state machine.
+"""Intent dispatch, character creation, and the guild-hall state machine.
 
-This is the entire API the Matrix adapter needs:
+The adapter's entire API:
 
     reply = handle(player, "accept 2")
 
-`handle` returns a list of markdown lines, or None meaning "this wasn't for us,
-stay out of the conversation". Returning None matters — the guild hall is a real
-room that people also chat in.
+Returns a list of markdown lines, or None meaning "not for us, stay quiet" —
+the guild hall is a room people also chat in.
+
+Three gates, checked in order: mid-creation input, no-character-yet, and the
+normal hall/combat commands.
 """
 
 from __future__ import annotations
@@ -14,190 +16,308 @@ from __future__ import annotations
 import random
 
 from . import combat
+from .chargen import CLASSES, RACES, find_class, find_race
 from .content import quests_for_rank
 from .state import (
-    BASE_MAX_FOCUS,
-    BASE_MAX_HP,
-    POTION_CHARGES,
+    MAX_NAME,
+    focus_regen_for,
+    MIN_NAME,
+    Character,
+    Pending,
     Player,
     Run,
+    Tombstone,
 )
 
 BOARD_SIZE = 3
 
-# Menu index -> action key. Order must match combat.available_actions().
-ACTION_ALIASES = {
-    "strike": "strike",
-    "hit": "strike",
-    "attack": "strike",
-    "fireball": "fireball",
-    "fire": "fireball",
-    "cast": "fireball",
-    "burn": "fireball",
-    "guard": "guard",
-    "block": "guard",
-    "defend": "guard",
-    "potion": "potion",
-    "drink": "potion",
-    "heal": "potion",
-}
 
-
-def _resolve_action(run: Run, word: str) -> str | None:
-    """Map a player's word or menu number onto an action key."""
-    if word.isdigit():
-        actions = combat.available_actions(run)
-        idx = int(word) - 1
-        return actions[idx][0] if 0 <= idx < len(actions) else None
-    return ACTION_ALIASES.get(word)
-
-
-# --------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # rendering
-# --------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
-def render_board(player: Player) -> list[str]:
+def render_races() -> list[str]:
+    lines = ["**Choose a race.**", ""]
+    for i, r in enumerate(RACES, 1):
+        lines.append(f"**{i}. {r.name}** — _{r.blurb}_")
+    lines.append("")
+    lines.append("Race is who you are, not what you can do — pick the one you "
+                 "like. Your class decides the numbers.")
+    lines.append("Reply with a number or the name.")
+    return lines
+
+
+def render_classes() -> list[str]:
+    lines = ["**Choose a class.**", ""]
+    for i, c in enumerate(CLASSES, 1):
+        mods = _mods(c.hp_mod, c.power_mod, c.focus_mod)
+        kit = " · ".join(a.name for a in c.abilities)
+        lines.append(f"**{i}. {c.name}** — {mods}")
+        lines.append(f"   _{c.blurb}_")
+        lines.append(f"   {kit}")
+    lines.append("")
+    lines.append("Reply with a number or the name.")
+    return lines
+
+
+def _mods(hp: int, power: int, focus: int) -> str:
+    parts = []
+    for label, value in (("HP", hp), ("power", power), ("focus", focus)):
+        if value:
+            parts.append(f"{value:+d} {label}")
+    return ", ".join(parts) if parts else "no modifiers"
+
+
+def render_character(char: Character) -> list[str]:
+    return [
+        f"**{char.title}** — Guild Rank {char.rank}",
+        f"HP {char.max_hp} · power {char.power} · focus {char.max_focus}",
+        f"Renown {char.renown} · Gold {char.gold} · "
+        f"{char.runs_completed} contracts completed",
+        "",
+        "**Abilities**",
+        *[f"  **{i}.** {a.name} — _{a.blurb}_"
+          for i, a in enumerate(char.abilities, 1)],
+    ]
+
+
+def render_board(char: Character) -> list[str]:
     lines = [
-        f"**The Quest Board** — Guild Rank {player.rank} · "
-        f"{player.renown} renown · {player.gold} gold",
+        f"**The Quest Board** — {char.name}, Guild Rank {char.rank} · "
+        f"{char.renown} renown · {char.gold} gold",
         "",
     ]
-    for i, q in enumerate(player.board, 1):
+    for i, q in enumerate(char.board, 1):
         lines.append(f"**{i}. {q.name}** _(tier {q.tier}, {q.stages} encounters)_")
         lines.append(f"   {q.flavor}")
         lines.append(f"   Reward: {q.gold} gold, {q.renown} renown")
     lines.append("")
-    lines.append("`accept <n>` to take a contract. `board` to re-read it.")
+    lines.append("`accept <n>` to take a contract.")
     return lines
 
 
-def render_combat(run: Run) -> list[str]:
+def render_combat(char: Character) -> list[str]:
+    run = char.run
+    assert run is not None and run.encounter is not None
     enc = run.encounter
-    assert enc is not None
     lines = [
         f"**{enc.monster.name}**  {combat.hp_bar(enc.hp, enc.monster.max_hp)} "
         f"{enc.hp}/{enc.monster.max_hp}",
         f"_{enc.next_move.telegraph}_",
         "",
-        f"**You**  {combat.hp_bar(run.hp, run.max_hp)} {run.hp}/{run.max_hp} · "
+        f"**{char.name}**  {combat.hp_bar(run.hp, run.max_hp)} {run.hp}/{run.max_hp} · "
         f"focus {run.focus}/{run.max_focus}",
         "",
     ]
-    for i, (key, label) in enumerate(combat.available_actions(run), 1):
-        lines.append(f"  **{i}.** {label}")
+    for i, (ab, usable, _why) in enumerate(combat.available_actions(char), 1):
+        suffix = ""
+        if ab.cost:
+            suffix = f" _({ab.cost} focus)_"
+        elif ab.uses is not None:
+            suffix = f" _({run.uses.get(ab.key, 0)} left)_"
+        mark = f"**{i}.**" if usable else f"~~{i}.~~"
+        lines.append(f"  {mark} {ab.name}{suffix}")
     return lines
 
 
-def render_status(player: Player) -> list[str]:
-    lines = [
-        f"**{player.name}** — Guild Rank {player.rank}",
-        f"Renown {player.renown} · Gold {player.gold} · "
-        f"{player.runs_completed} contracts completed · {player.deaths} deaths",
-    ]
-    if player.run:
-        run = player.run
-        lines.append("")
+def render_graveyard(player: Player) -> list[str]:
+    if not player.graveyard:
+        return ["No one of yours has died yet. Give it time."]
+    lines = [f"**The Graveyard** — {len(player.graveyard)} fallen", ""]
+    for t in reversed(player.graveyard[-10:]):
         lines.append(
-            f"On contract: **{run.quest.name}**, encounter "
-            f"{run.stage + 1}/{run.quest.stages}"
+            f"  **{t.name}** the {t.race} {t.char_class} — {t.renown} renown, "
+            f"{t.runs_completed} contracts. Killed by {t.killed_by}."
         )
     return lines
 
 
-# --------------------------------------------------------------------------
-# transitions
-# --------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# character creation
+# ---------------------------------------------------------------------------
 
-def roll_board(player: Player, rng: random.Random | None = None) -> None:
+def begin_creation(player: Player) -> list[str]:
+    player.pending = Pending(step="name")
+    return [
+        "**A new adventurer signs the guild register.**",
+        "",
+        f"What's your name? _({MIN_NAME}–{MAX_NAME} characters.)_",
+        "",
+        "`cancel` to back out.",
+    ]
+
+
+def _validate_name(raw: str) -> tuple[str | None, str]:
+    name = " ".join(raw.split())
+    if len(name) < MIN_NAME:
+        return None, f"Too short — at least {MIN_NAME} characters."
+    if len(name) > MAX_NAME:
+        return None, f"Too long — at most {MAX_NAME} characters."
+    if not any(ch.isalpha() for ch in name):
+        return None, "Needs at least one letter."
+    return name, ""
+
+
+def _creation_input(player: Player, text: str) -> list[str]:
+    pending = player.pending
+    assert pending is not None
+
+    if text.strip().lower() in ("cancel", "abort", "stop"):
+        player.pending = None
+        return ["Register closed. `create` when you're ready."]
+
+    if pending.step == "name":
+        name, why = _validate_name(text)
+        if name is None:
+            return [why]
+        pending.name = name
+        pending.step = "race"
+        return [f"Well met, **{name}**.", "", *render_races()]
+
+    if pending.step == "race":
+        race = find_race(text)
+        if race is None:
+            return ["I don't know that race.", "", *render_races()]
+        pending.race_key = race.key
+        pending.step = "class"
+        return [f"**{race.name}.** {race.blurb}", "", *render_classes()]
+
+    if pending.step == "class":
+        cls = find_class(text)
+        if cls is None:
+            return ["I don't know that calling.", "", *render_classes()]
+        char = Character(
+            name=pending.name, race_key=pending.race_key, class_key=cls.key
+        )
+        roll_board(char)
+        player.character = char
+        player.pending = None
+        return [
+            "**The register is signed.**",
+            "",
+            *render_character(char),
+            "",
+            "Death is permanent here — when you fall, everything above is lost "
+            "and you start again from nothing.",
+            "",
+            "`board` to see what work there is.",
+        ]
+
+    player.pending = None  # unreachable, but never strand a player
+    return ["Something went wrong with the register. `create` to start over."]
+
+
+# ---------------------------------------------------------------------------
+# runs
+# ---------------------------------------------------------------------------
+
+def roll_board(char: Character, rng: random.Random | None = None) -> None:
     rng = rng or random.Random()
-    pool = quests_for_rank(player.rank)
-    player.board = rng.sample(pool, min(BOARD_SIZE, len(pool)))
+    pool = quests_for_rank(char.rank)
+    char.board = rng.sample(pool, min(BOARD_SIZE, len(pool)))
 
 
-def start_run(player: Player, quest, seed: int | None = None) -> list[str]:
+def start_run(char: Character, quest, seed: int | None = None) -> list[str]:
     rng = random.Random(seed)
     run = Run(
         quest=quest,
-        hp=BASE_MAX_HP,
-        max_hp=BASE_MAX_HP,
-        focus=BASE_MAX_FOCUS,
-        max_focus=BASE_MAX_FOCUS,
-        potions=POTION_CHARGES,
+        hp=char.max_hp,
+        max_hp=char.max_hp,
+        focus=char.max_focus,
+        max_focus=char.max_focus,
+        power=char.power,
+        focus_regen=focus_regen_for(char.max_focus),
+        uses={a.key: a.uses for a in char.abilities if a.uses is not None},
         rng=rng,
     )
     run.encounter = combat.spawn(rng.choice(quest.pool), rng)
-    player.run = run
+    char.run = run
     return [
         f"**{quest.name}**",
         f"_{quest.flavor}_",
         "",
-        f"You set out. Encounter 1 of {quest.stages}.",
+        f"{char.name} sets out. Encounter 1 of {quest.stages}.",
         "",
-        *render_combat(run),
+        *render_combat(char),
     ]
 
 
-def _advance_after_kill(player: Player) -> list[str]:
-    """Monster died: next encounter, or finish the contract."""
-    run = player.run
+def _advance_after_kill(char: Character) -> list[str]:
+    run = char.run
     assert run is not None
     run.stage += 1
 
     if run.stage >= run.quest.stages:
-        player.gold += run.quest.gold
-        player.renown += run.quest.renown
-        player.runs_completed += 1
-        old_rank = player.rank
-        player.run = None
+        char.gold += run.quest.gold
+        char.renown += run.quest.renown
+        char.runs_completed += 1
+        old_rank = char.rank
+        char.run = None
         lines = [
             "",
             f"**Contract complete — {run.quest.name}**",
             f"+{run.quest.gold} gold, +{run.quest.renown} renown.",
         ]
-        if player.rank > old_rank:
-            lines.append(f"**You are promoted to Guild Rank {player.rank}.** "
+        if char.rank > old_rank:
+            lines.append(f"**{char.name} is promoted to Guild Rank {char.rank}.** "
                          "Harder contracts are on the board.")
-        roll_board(player, run.rng)
+        roll_board(char, run.rng)
         lines.append("")
-        lines.append("You walk back into the hall. `board` to see what's up.")
+        lines.append("Back to the hall. `board` to see what's up.")
         return lines
 
     run.encounter = combat.spawn(run.rng.choice(run.quest.pool), run.rng)
     return [
         "",
         f"Encounter {run.stage + 1} of {run.quest.stages}. "
-        f"_(HP and focus carry over — no rest between fights.)_",
+        "_(HP and focus carry over — no rest between fights.)_",
         "",
-        *render_combat(run),
+        *render_combat(char),
     ]
 
 
 def _handle_death(player: Player) -> list[str]:
-    run = player.run
-    assert run is not None
-    player.deaths += 1
-    player.run = None
-    roll_board(player, run.rng)
+    """Permadeath. The character is destroyed; only a tombstone remains."""
+    char = player.character
+    assert char is not None and char.run is not None
+    killer = char.run.encounter.monster.name if char.run.encounter else "the road"
+
+    player.graveyard.append(Tombstone(
+        name=char.name,
+        race=char.race.name,
+        char_class=char.char_class.name,
+        renown=char.renown,
+        runs_completed=char.runs_completed,
+        killed_by=killer,
+    ))
+    player.character = None
+
     return [
         "",
-        "**You go down.**",
-        f"You wake in the guild infirmary. The {run.quest.name} contract is "
-        "forfeit — someone else will take it.",
+        f"**{char.title} is dead.**",
+        f"Killed by a {killer} on {char.run.quest.name}, "
+        f"with {char.renown} renown and {char.gold} gold to their name.",
         "",
-        f"You keep your renown ({player.renown}) and your gold ({player.gold}). "
-        "`board` when you're ready.",
+        "It is all gone — the renown, the gold, the rank. That is the bargain "
+        "this guild offers.",
+        "",
+        "`create` to sign the register again. `graveyard` to remember.",
     ]
 
 
-# --------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # entry point
-# --------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 def handle(player: Player, text: str) -> list[str] | None:
-    """Route one line of player input. None means 'not a command, ignore it'."""
     raw = text.strip()
     if not raw:
         return None
+
+    # 1. Mid-creation: the player opted in with `create`, so their next lines
+    #    belong to the register rather than the room.
+    if player.pending is not None:
+        return _creation_input(player, raw)
 
     explicit = raw.startswith("!")
     body = raw[1:].strip() if explicit else raw
@@ -206,88 +326,129 @@ def handle(player: Player, text: str) -> list[str] | None:
         return None
     word = parts[0].lower()
 
-    # --- combat input -----------------------------------------------------
-    if player.in_combat:
-        run = player.run
-        assert run is not None
-        # A bare number is only a command because this player has a live fight.
-        # Anyone not fighting can type "1" in the room and we stay quiet.
-        action = _resolve_action(run, word)
-        if action:
-            ok, why = combat.action_is_legal(run, action)
-            if not ok:
-                return [why, "", *render_combat(run)]
-
-            lines = combat.player_turn(run, action)
-            if not run.encounter.alive:
-                lines.append(f"The {run.encounter.monster.name} falls.")
-                return lines + _advance_after_kill(player)
-
-            lines += combat.monster_turn(run)
-            if not run.alive:
-                return lines + _handle_death(player)
-
-            return lines + ["", *render_combat(run)]
-
-        if word in ("flee", "run"):
-            return _handle_flee(player)
-        if word in ("status", "hp"):
-            return render_status(player)
-        if word == "help":
-            return _render_help(player)
+    # 2. No character: almost nothing works until you make one.
+    if player.character is None:
+        if word in ("create", "new", "start", "register"):
+            return begin_creation(player)
+        if word == "graveyard":
+            return render_graveyard(player)
+        if word in ("help", "board", "quests", "status", "accept", "me"):
+            return [
+                "You have no character. `create` to make one.",
+                "",
+                f"_{player.deaths} of yours "
+                f"{'has' if player.deaths == 1 else 'have'} died so far._"
+                if player.deaths
+                else "_Death here is permanent, so choose carefully._",
+            ]
         return None
 
-    # --- guild hall -------------------------------------------------------
-    if word in ("board", "quests", "quest"):
-        if not player.board:
-            roll_board(player)
-        return render_board(player)
+    char = player.character
 
-    if word == "accept" or word == "take":
-        if not player.board:
-            roll_board(player)
-            return ["You haven't read the board yet.", "", *render_board(player)]
+    # 3. In combat: a bare number is a command only because this player has a
+    #    live encounter. Everyone else typing "1" is just chatting.
+    if char.in_combat:
+        ab = _resolve_ability(char, word)
+        if ab is not None:
+            usable, why = combat.ability_is_legal(char, ab)
+            if not usable:
+                return [why, "", *render_combat(char)]
+
+            lines = combat.player_turn(char, ab)
+            if not char.run.encounter.alive:
+                lines.append(f"The {char.run.encounter.monster.name} falls.")
+                return lines + _advance_after_kill(char)
+
+            lines += combat.monster_turn(char)
+            if not char.run.alive:
+                return lines + _handle_death(player)
+
+            return lines + ["", *render_combat(char)]
+
+        if word in ("flee", "run"):
+            return _flee(char)
+        if word in ("status", "me", "char"):
+            return render_character(char)
+        if word == "help":
+            return _help(char)
+        return None
+
+    # 4. Guild hall.
+    if word in ("board", "quests", "quest"):
+        if not char.board:
+            roll_board(char)
+        return render_board(char)
+
+    if word in ("accept", "take"):
+        if not char.board:
+            roll_board(char)
+            return ["You haven't read the board yet.", "", *render_board(char)]
         if len(parts) < 2 or not parts[1].isdigit():
             return ["Which one? `accept 1`, `accept 2`…"]
         idx = int(parts[1]) - 1
-        if not 0 <= idx < len(player.board):
+        if not 0 <= idx < len(char.board):
             return [f"There's no contract {parts[1]} on the board."]
-        return start_run(player, player.board[idx])
+        return start_run(char, char.board[idx])
 
-    if word in ("status", "me"):
-        return render_status(player)
+    if word in ("status", "me", "char", "sheet"):
+        return render_character(char)
+
+    if word == "graveyard":
+        return render_graveyard(player)
+
+    if word in ("create", "new"):
+        return [
+            f"**{char.title}** is still alive and still working.",
+            "You only get one at a time. The register opens when they fall.",
+        ]
 
     if word == "help":
-        return _render_help(player)
+        return _help(char)
 
     return None
 
 
-def _handle_flee(player: Player) -> list[str]:
-    run = player.run
+def _resolve_ability(char: Character, word: str):
+    abilities = char.abilities
+    if word.isdigit():
+        idx = int(word) - 1
+        return abilities[idx] if 0 <= idx < len(abilities) else None
+    token = word.lower()
+    for ab in abilities:
+        if token == ab.key or token == ab.name.lower().split()[0]:
+            return ab
+    return None
+
+
+def _flee(char: Character) -> list[str]:
+    run = char.run
     assert run is not None
-    player.run = None
-    roll_board(player, run.rng)
+    char.run = None
+    roll_board(char, run.rng)
     return [
-        f"You break off and run. The {run.quest.name} contract is abandoned — "
-        "no pay, no renown, but you keep your skin.",
+        f"{char.name} breaks off and runs. The {run.quest.name} contract is "
+        "abandoned — no pay, no renown, but you live.",
         "",
         "`board` to pick up something else.",
     ]
 
 
-def _render_help(player: Player) -> list[str]:
-    if player.in_combat:
+def _help(char: Character) -> list[str]:
+    if char.in_combat:
+        slots = " · ".join(
+            f"`{i}` {ab.name}" for i, ab in enumerate(char.abilities, 1)
+        )
         return [
-            "**In combat** — reply with the number of your action, or its name:",
-            "`1` / `strike` · `2` / `fireball` · `3` / `guard` · `4` / `potion`",
-            "`flee` to abandon the contract. `status` for your sheet.",
+            "**In combat** — reply with a number, or the ability's name:",
+            slots,
+            "`flee` to abandon the contract · `status` for your sheet.",
         ]
     return [
         "**Guild Hall**",
         "`board` — read the quest board",
         "`accept <n>` — take a contract",
-        "`status` — your sheet",
+        "`status` — your character sheet",
+        "`graveyard` — your fallen",
         "",
         "Prefix anything with `!` if the room is busy (`!board`).",
     ]

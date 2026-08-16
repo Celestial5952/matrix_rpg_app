@@ -8,7 +8,8 @@ Matrix rather than Discord.
 
 ## Status
 
-Playable offline core, plus a working Matrix adapter.
+Playable offline core, plus a Matrix adapter that has been run against a real
+homeserver. Character creation and permadeath are in.
 
 ```bash
 python3 play.py
@@ -91,8 +92,9 @@ core/
   state.py     Player (meta, survives death) vs Run (wiped on death)
   content.py   monsters + quests — the file meant to grow to thousands of lines
   combat.py    turn resolution, damage, telegraphed monster moves
-  game.py      command routing + guild hall state machine
-  persist.py   JSON persistence for Player meta-state
+  game.py      command routing, character creation, guild hall state machine
+  chargen.py   races (cosmetic) and classes (mechanical) + ability kits
+  persist.py   JSON persistence for Player, Character and graveyard
 play.py        offline playtest REPL
 adapters/
   matrix.py    sync loop, event -> handle(), lines -> m.room.message — the
@@ -110,21 +112,43 @@ it has a role beyond bigger numbers. Focus regenerates 1/turn and Guard grants
 HP and focus carry across encounters within a contract, with no rest between —
 attrition is the tension. Potions are limited per run.
 
-## Roguelite split
+## Characters and permadeath
 
-- **Run state** — HP, focus, potions. Destroyed on death.
-- **Meta state** — renown, gold, guild rank, completed contracts. Survives.
+You cannot do anything until you `create` a character: name, then race, then
+class. The character is bound to your MXID, and you only ever have one alive.
 
-Guild rank gates which quest tiers appear on the board. Meta progression has to
-be legible as *text* — "Rank 4 → Bronze contracts unlocked" reads fine in a chat
+**Death is permanent and total.** The character is destroyed along with its
+renown, gold, and rank. All that survives is a tombstone in your `graveyard`,
+which is pure flavour and confers no mechanical advantage. This is a roguelike,
+not a roguelite — the ownership model in `state.py` exists to make that true by
+construction:
+
+    Player     the Matrix account. Survives forever. Holds the graveyard.
+    Character  what you create and what dies. Owns renown, gold, the board.
+    Run        one contract attempt. Destroyed on death, flee, or restart.
+
+Everything of value hangs off Character, so deleting it *is* permadeath — there
+is no second place progress could hide.
+
+**Race is cosmetic. Class is mechanical.** Race carries no stats at all, and a
+test enforces it. When race had stat modifiers, HP races strictly dominated
+focus races at every single class — Dwarf Wizard beat Elf Wizard — which made
+the choice a trap rather than a character. Class decides HP, power, focus and
+the four-ability kit.
+
+Guild rank gates which quest tiers appear on the board. Progression has to be
+legible as *text* — "Rank 3 → Barrow contracts unlocked" reads fine in a chat
 client; a 40-node skill constellation does not.
 
 ## Known gaps
 
 - **Never run against a real homeserver yet.** The adapter is covered by tests
   against a stub client, which is not the same as proven.
-- Persistence covers Player meta-state only — an in-progress run doesn't
-  survive a restart
+- Persistence covers the Player, Character and graveyard — an in-progress run
+  doesn't survive a restart, which lands you where `flee` would have
+- **Wizard is the weakest class** (34% on tier 3 vs Fighter's 72%). Intended to
+  be the high-risk pick, but that gap wants human playtesting, not more
+  simulation
 - Balance is first-draft and unplaytested beyond a few fights
 - The adapter's markdown → HTML rendering only understands `**bold**`,
   `_italic_`, `` `code` `` — enough for current game text, not a general

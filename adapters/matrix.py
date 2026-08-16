@@ -109,11 +109,13 @@ class Bot:
     def _player(self, mxid: str, display_name: str) -> Player:
         player = self.players.get(mxid)
         if player is None:
-            player = Player(mxid=mxid, name=display_name)
+            player = Player(mxid=mxid, display_name=display_name)
             self.players[mxid] = player
-        elif display_name and player.name != display_name:
-            # Identity is the MXID; the name is cosmetic, so track renames.
-            player.name = display_name
+        elif display_name and player.display_name != display_name:
+            # Identity is the MXID; the Matrix display name is cosmetic and is
+            # not the character's name — renaming in Element must not rename
+            # the character you rolled.
+            player.display_name = display_name
         return player
 
     async def on_message(self, room: MatrixRoom, event: RoomMessageText) -> None:

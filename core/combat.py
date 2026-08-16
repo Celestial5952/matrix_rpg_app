@@ -1,8 +1,8 @@
 """Combat resolution.
 
-Every function here takes state and returns a list of narration lines. Nothing
-formats for Matrix, nothing prints. The adapter decides how lines become
-messages (one per line, or joined into a single edited message).
+Every function takes state and returns a list of narration lines. Nothing
+formats for Matrix, nothing prints. Abilities come from the character's class,
+so adding a class needs no changes here.
 """
 
 from __future__ import annotations
@@ -10,17 +10,12 @@ from __future__ import annotations
 import random
 
 from .content import MONSTERS
-from .state import BASE_POWER, FOCUS_REGEN, POTION_HEAL, Encounter, Monster, Run
+from .state import Ability, Character, Encounter, Monster
 
-FIREBALL_COST = 3
-FIREBALL_MULTIPLIER = 1.8
-GUARD_FOCUS_GAIN = 2
-GUARD_REDUCTION = 0.4  # incoming damage multiplier while guarding
 MONSTER_GUARD_REDUCTION = 0.5
 
 
 def roll(base: float, rng: random.Random, variance: float = 0.18) -> int:
-    """Damage roll with a little spread, never less than 1."""
     lo, hi = base * (1 - variance), base * (1 + variance)
     return max(1, round(rng.uniform(lo, hi)))
 
@@ -32,106 +27,101 @@ def hp_bar(current: int, maximum: int, width: int = 10) -> str:
 
 def spawn(monster_key: str, rng: random.Random) -> Encounter:
     monster: Monster = MONSTERS[monster_key]
-    return Encounter(
-        monster=monster,
-        hp=monster.max_hp,
-        next_move=rng.choice(monster.moves),
-    )
+    return Encounter(monster=monster, hp=monster.max_hp,
+                     next_move=rng.choice(monster.moves))
 
 
-def player_turn(run: Run, action: str) -> list[str]:
-    """Resolve the player's chosen action. Assumes action is already validated."""
+def available_actions(char: Character) -> list[tuple[Ability, bool, str]]:
+    """(ability, usable, why-not) in menu order — always the same four slots."""
+    run = char.run
+    assert run is not None
+    out = []
+    for ab in char.abilities:
+        usable, why = ability_is_legal(char, ab)
+        out.append((ab, usable, why))
+    return out
+
+
+def ability_is_legal(char: Character, ab: Ability) -> tuple[bool, str]:
+    run = char.run
+    assert run is not None
+    if ab.cost and run.focus < ab.cost:
+        return False, f"{ab.name} needs {ab.cost} focus — you have {run.focus}."
+    if ab.uses is not None and run.uses.get(ab.key, 0) <= 0:
+        return False, f"No {ab.name} left this contract."
+    return True, ""
+
+
+def player_turn(char: Character, ab: Ability) -> list[str]:
+    """Resolve the chosen ability. Assumes it has already been validated."""
+    run = char.run
+    assert run is not None and run.encounter is not None
     enc = run.encounter
-    assert enc is not None
     lines: list[str] = []
-    guard_mult = MONSTER_GUARD_REDUCTION if enc.guarding else 1.0
 
-    if action == "strike":
-        raw = roll(BASE_POWER, run.rng)
-        dealt = max(1, round((raw - enc.monster.armor) * guard_mult))
+    if ab.cost:
+        run.focus -= ab.cost
+    if ab.uses is not None:
+        run.uses[ab.key] = run.uses.get(ab.key, 0) - 1
+
+    if ab.kind == "attack":
+        monster_guard = MONSTER_GUARD_REDUCTION if enc.guarding else 1.0
+        raw = roll(run.power * ab.multiplier, run.rng)
+        dealt = raw if ab.ignores_armor else max(1, raw - enc.monster.armor)
+        dealt = max(1, round(dealt * monster_guard))
         enc.hp -= dealt
-        lines.append(f"You strike the {enc.monster.name} for **{dealt}**.")
-        if enc.monster.armor and guard_mult == 1.0:
-            lines[-1] += f" _(armour absorbed {min(raw - 1, enc.monster.armor)})_"
+        lines.append(f"**{ab.name}** — you hit the {enc.monster.name} for **{dealt}**.")
+        if ab.ignores_armor and enc.monster.armor:
+            lines.append(f"_{enc.monster.armor} armour ignored._")
+        elif enc.monster.armor:
+            lines.append(f"_Armour absorbs {min(raw - 1, enc.monster.armor)}._")
+        if enc.guarding:
+            lines.append(f"The {enc.monster.name}'s guard blunts the blow.")
 
-    elif action == "fireball":
-        run.focus -= FIREBALL_COST
-        # Fireball ignores armour — that is its whole reason to exist against
-        # the armoured monsters, not raw numbers.
-        dealt = max(1, round(roll(BASE_POWER * FIREBALL_MULTIPLIER, run.rng) * guard_mult))
-        enc.hp -= dealt
-        lines.append(
-            f"Fire leaps from your hand and washes over the {enc.monster.name} "
-            f"for **{dealt}**. _(armour ignored)_"
-        )
+    elif ab.kind == "guard":
+        run.pending_guard = ab.guard_reduction
+        if ab.focus_gain:
+            run.focus = min(run.max_focus, run.focus + ab.focus_gain)
+        lines.append(f"**{ab.name}** — {ab.blurb.lower().rstrip('.')}."
+                     + (f" _(+{ab.focus_gain} focus)_" if ab.focus_gain else ""))
 
-    elif action == "guard":
-        run.guard_active = True
-        run.focus = min(run.max_focus, run.focus + GUARD_FOCUS_GAIN)
-        lines.append(
-            f"You set your feet and raise your guard. _(+{GUARD_FOCUS_GAIN} focus)_"
-        )
-
-    elif action == "potion":
-        run.potions -= 1
-        healed = min(POTION_HEAL, run.max_hp - run.hp)
+    elif ab.kind == "heal":
+        healed = min(ab.heal, run.max_hp - run.hp)
         run.hp += healed
-        lines.append(
-            f"You drain a flask. _(+{healed} HP, {run.potions} left)_"
-        )
+        left = run.uses.get(ab.key, 0)
+        lines.append(f"**{ab.name}** — you recover **{healed}** HP. _({left} left)_")
 
-    if enc.guarding and action in ("strike", "fireball"):
-        lines.append(f"The {enc.monster.name}'s guard blunts the blow.")
     enc.guarding = False
     return lines
 
 
-def monster_turn(run: Run) -> list[str]:
-    """Execute the move the monster telegraphed last turn, then roll the next."""
+def monster_turn(char: Character) -> list[str]:
+    """Execute the telegraphed move, then roll the next one."""
+    run = char.run
+    assert run is not None and run.encounter is not None
     enc = run.encounter
-    assert enc is not None
     lines: list[str] = []
     move = enc.next_move
-    incoming_mult = GUARD_REDUCTION if run.guard_active else 1.0
+    guard = run.pending_guard
 
     if move.kind == "guard":
         enc.guarding = True
         lines.append(f"The {enc.monster.name} braces itself.")
     else:
-        dealt = max(1, round(roll(enc.monster.power * move.multiplier, run.rng) * incoming_mult))
+        raw = roll(enc.monster.power * move.multiplier, run.rng)
+        dealt = max(1, round(raw * (guard if guard is not None else 1.0)))
         run.hp -= dealt
         verb = "hits you hard" if move.kind == "heavy" else "hits you"
         lines.append(f"**{move.name}** — the {enc.monster.name} {verb} for **{dealt}**.")
-        if run.guard_active:
-            lines.append("Your guard takes most of it.")
+        if guard is not None:
+            lines.append(f"_Your guard absorbs {raw - dealt}._")
         if move.kind == "drain":
             healed = min(dealt // 2, enc.monster.max_hp - enc.hp)
             if healed > 0:
                 enc.hp += healed
                 lines.append(f"The {enc.monster.name} draws {healed} HP from the wound.")
 
-    run.guard_active = False
-    run.focus = min(run.max_focus, run.focus + FOCUS_REGEN)
+    run.pending_guard = None
+    run.focus = min(run.max_focus, run.focus + run.focus_regen)
     enc.next_move = run.rng.choice(enc.monster.moves)
     return lines
-
-
-def available_actions(run: Run) -> list[tuple[str, str]]:
-    """(key, label) pairs the player can pick right now, in menu order."""
-    actions = [("strike", "Strike")]
-    if run.focus >= FIREBALL_COST:
-        actions.append(("fireball", f"Fireball ({FIREBALL_COST} focus)"))
-    else:
-        actions.append(("fireball", f"Fireball — need {FIREBALL_COST} focus"))
-    actions.append(("guard", f"Guard (+{GUARD_FOCUS_GAIN} focus)"))
-    if run.potions > 0:
-        actions.append(("potion", f"Potion (+{POTION_HEAL} HP, {run.potions} left)"))
-    return actions
-
-
-def action_is_legal(run: Run, action: str) -> tuple[bool, str]:
-    if action == "fireball" and run.focus < FIREBALL_COST:
-        return False, f"Not enough focus — you have {run.focus}, Fireball costs {FIREBALL_COST}."
-    if action == "potion" and run.potions <= 0:
-        return False, "You're out of potions."
-    return True, ""

@@ -11,17 +11,16 @@ from __future__ import annotations
 
 import sys
 
-from core.game import handle, roll_board
+from core.game import handle
 from core.state import Player
 
 
 def main() -> int:
-    player = Player(mxid="@you:local", name="Playtester")
-    roll_board(player)
+    player = Player(mxid="@you:local", display_name="Playtester")
 
     print("=== Guild Hall (offline playtest) ===")
-    print("Type `help`, `board`, `accept 1`. Ctrl-D to quit.\n")
-    for line in handle(player, "board") or []:
+    print("Ctrl-D to quit.\n")
+    for line in handle(player, "create") or []:
         print(line)
 
     while True:

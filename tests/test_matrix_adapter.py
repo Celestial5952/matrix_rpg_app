@@ -19,7 +19,7 @@ from nio import RoomSendError
 
 import adapters.matrix as adapter
 from adapters.matrix import Bot, _to_html
-from core.state import Player
+from core.state import Character, Player
 
 
 # --- markdown -> HTML ------------------------------------------------------
@@ -106,12 +106,26 @@ def deliver(bot: Bot, body: str, sender: str = "@player:srv", ts: int | None = N
     asyncio.run(bot.on_message(FakeRoom(ROOM), FakeEvent(sender, body, ts)))
 
 
+def enrol(bot: Bot, sender: str = "@player:srv", name: str = "Tester") -> None:
+    """Drive the register so `sender` has a living character, then reset the
+    outbox — most routing tests care about what happens *after* creation."""
+    for line in ("create", name, "human", "fighter"):
+        deliver(bot, line, sender=sender)
+    bot.client.sent.clear()
+
+
 # --- routing ---------------------------------------------------------------
 
 def test_command_gets_a_reply(bot: Bot) -> None:
+    enrol(bot)
     deliver(bot, "board")
     assert len(bot.client.sent) == 1
     assert "Quest Board" in bot.client.sent[0]["body"]
+
+
+def test_a_character_is_required_before_the_board(bot: Bot) -> None:
+    deliver(bot, "board")
+    assert "no character" in bot.client.sent[0]["body"].lower()
 
 
 def test_chatter_gets_no_reply(bot: Bot) -> None:
@@ -150,7 +164,7 @@ def test_resumed_start_trusts_the_sync_token(bot: Bot) -> None:
 
 
 def test_replies_carry_html(bot: Bot) -> None:
-    deliver(bot, "board")
+    deliver(bot, "create")
     content = bot.client.sent[0]
     assert content["msgtype"] == "m.notice"
     assert content["format"] == "org.matrix.custom.html"
@@ -166,12 +180,19 @@ def test_players_are_keyed_by_mxid(bot: Bot) -> None:
 
 
 def test_progress_persists_across_a_restart(bot: Bot) -> None:
-    bot.players["@a:srv"] = Player(mxid="@a:srv", name="A", renown=25, gold=99)
+    bot.players["@a:srv"] = Player(
+        mxid="@a:srv",
+        display_name="A",
+        character=Character(name="Bruni", race_key="dwarf", class_key="cleric",
+                            renown=25, gold=99),
+    )
     deliver(bot, "board", sender="@a:srv")  # any command triggers a save
 
     revived = Bot()  # same MATRIX_STATE_DIR, so this is a restart
-    assert revived.players["@a:srv"].renown == 25
-    assert revived.players["@a:srv"].gold == 99
+    char = revived.players["@a:srv"].character
+    assert char is not None and char.name == "Bruni"
+    assert char.renown == 25
+    assert char.gold == 99
 
 
 def test_display_name_changes_are_tracked(bot: Bot) -> None:
@@ -182,7 +203,7 @@ def test_display_name_changes_are_tracked(bot: Bot) -> None:
             return "NewName"
 
     asyncio.run(bot.on_message(Renamed(ROOM), FakeEvent("@a:srv", "board")))
-    assert bot.players["@a:srv"].name == "NewName"
+    assert bot.players["@a:srv"].display_name == "NewName"
 
 
 # --- resilience ------------------------------------------------------------
