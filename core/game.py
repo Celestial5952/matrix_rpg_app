@@ -730,7 +730,6 @@ def _advance_after_kill(char: Character,
     if run.stage >= run.quest.stages:
         old_rank = char.rank
         old_level = char.level
-        old_abilities = {a.key for a in char.abilities}
         char.gold += run.quest.gold
         char.renown += run.quest.renown
         char.runs_completed += 1
@@ -1225,7 +1224,6 @@ def _party_action(player: Player, party: Party, ability,
                   parties: Parties) -> list[str]:
     """One member's turn against the shared monster."""
     char = player.character
-    run = char.run
     lines = combat.player_turn(char, ability)
 
     if not party.encounter.alive:
@@ -1734,7 +1732,7 @@ def handle(player: Player, text: str,
                 "_The clerk does not look up._ _'Impressive.'_"]
 
     if word in ("refresh", "reroll"):
-        return _refresh_board(char, guild)
+        return _refresh_board(char, guild, roster)
 
     # Note: `create` is deliberately absent — it belongs to character
     # creation. A party is started with `!party`.
@@ -2096,7 +2094,8 @@ def _bar_duty_refusal(char: Character) -> list[str]:
     ]
 
 
-def _refresh_board(char: Character, guild: Guild | None = None) -> list[str]:
+def _refresh_board(char: Character, guild: Guild | None = None,
+                   roster: dict[str, Player] | None = None) -> list[str]:
     """Pay to have the board rewritten. Gives gold a second sink."""
     if char.gold < REROLL_COST:
         return [f"Rewriting the board costs {REROLL_COST}g and you have "
@@ -2116,7 +2115,7 @@ def _buy(char: Character, args: list[str]) -> list[str]:
     if not matches:
         return [f"The quartermaster doesn't stock '{args[0]}'.", "", *render_shop(char)]
     if len(matches) > 1:
-        return [f"Which one? " + " · ".join(m.name for m in matches)]
+        return ["Which one? " + " · ".join(m.name for m in matches)]
     item = matches[0]
 
     qty = 1
@@ -2201,7 +2200,7 @@ def _use(char: Character, args: list[str], player: Player,
     if not matches:
         return [f"You're not carrying '{args[0]}'.", "", *render_inventory(char)]
     if len(matches) > 1:
-        return [f"Which one? " + " · ".join(m.name for m in matches)]
+        return ["Which one? " + " · ".join(m.name for m in matches)]
     item = matches[0]
     if item.kind == "summon":
         return _summon(player, args[1:], roster, parties, None)

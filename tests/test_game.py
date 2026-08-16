@@ -462,3 +462,54 @@ def test_completing_a_contract_pays_out():
     if player.character is not None and char.runs_completed:
         assert char.gold >= quest.gold
         assert char.renown >= quest.renown
+
+
+# --- refreshing the board --------------------------------------------------
+
+def test_refresh_is_refused_when_broke():
+    from core.game import REROLL_COST
+
+    player = make_char()
+    player.character.gold = REROLL_COST - 1
+    before = list(player.character.board)
+    reply = handle(player, "!refresh")
+
+    assert "costs" in " ".join(reply).lower()
+    assert player.character.board == before
+
+
+def test_refresh_charges_and_reposts():
+    from core.game import REROLL_COST
+
+    player = make_char()
+    player.character.gold = 100
+    handle(player, "!board")
+
+    reply = handle(player, "!refresh")
+    assert player.character.gold == 100 - REROLL_COST
+    assert "Quest Board" in " ".join(reply)
+
+
+def test_refresh_works_with_a_roster_and_a_guild():
+    """Regression: !refresh raised NameError reaching for a roster it lacked."""
+    from core.guild import Guild
+
+    player = make_char()
+    player.character.gold = 50
+    roster = {player.mxid: player}
+    reply = handle(player, "!refresh", roster, Guild())
+    assert reply is not None
+    assert "Quest Board" in " ".join(reply)
+
+
+def test_refresh_works_in_a_private_room():
+    from core.duel import Duels
+    from core.guild import Guild
+    from core.party import Parties
+
+    player = make_char()
+    player.character.gold = 50
+    reply = handle(player, "!refresh", {player.mxid: player}, Guild(),
+                   Parties(), Duels(), None, True)
+    assert reply is not None
+    assert "Quest Board" in " ".join(reply)
