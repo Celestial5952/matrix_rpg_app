@@ -108,6 +108,29 @@ adapters/
 tests/         pytest suite; no homeserver required
 ```
 
+## The board
+
+The board never posts a quest template directly. It **rolls a Contract**: the
+template plus varied rewards (±15%), a length that can shift, an opening line
+picked from several, and zero to two modifiers. Two runs of "Rats in the Cellar"
+should not feel like the same errand twice.
+
+Modifiers change the fight and what it pays — Fortified adds armour, Savage
+raises monster power, Teeming raises monster HP, Swarming adds an encounter,
+Urgent removes one and pays for the hurry, Thankless trades gold for renown.
+Higher tiers roll them more often.
+
+Measured at level 3 on a tier-2 contract, an unmodified run wins 96.6% and the
+combat modifiers pull that to 90 / 85 / 84. That spread took tuning: Fortified
+and Teeming originally cost under 3 points while paying *more* gold, which made
+them free money.
+
+**Story contracts** are gated on renown rather than rank and appear by chance
+(`STORY_CHANCE`), displacing an ordinary posting rather than adding a slot — so
+the board stays a fixed size and a story job costs you real work. Add a `Quest`
+with `story=True` and a `min_renown` and it enters the rotation; nothing else
+needs changing. `The Sealed Name` at 30 renown is the first one.
+
 ## Levelling and the spellbook
 
 Renown doubles as XP — one currency, not two. Levels 1–8 raise stats gently
@@ -201,6 +224,8 @@ client; a 40-node skill constellation does not.
 - **Wizard is the weakest class** (36% on tier 3 at level 1 vs Fighter's 70%).
   Intended to be the high-risk pick, but that gap wants human playtesting, not
   more simulation
+- Story is one contract and a hook, not a campaign — there is no chain, no
+  state carried between story missions, and no ending
 - **Content runs out above level 5.** A level-5 party clears tier 3 at 77–97%,
   so the Barrow Door stops being frightening well before level 8. That is a
   content gap, not a systems one — `content.py` needs tier 4+

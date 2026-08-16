@@ -129,7 +129,25 @@ class Monster:
 
 
 @dataclass(frozen=True)
+class Modifier:
+    """A rolled complication. Changes the fight and what it pays."""
+
+    key: str
+    name: str
+    blurb: str
+    stages_delta: int = 0
+    gold_mult: float = 1.0
+    renown_mult: float = 1.0
+    monster_hp_mult: float = 1.0
+    monster_power_mult: float = 1.0
+    monster_armor_delta: int = 0
+    extra_loot: int = 0
+
+
+@dataclass(frozen=True)
 class Quest:
+    """A template. The board never posts one of these directly."""
+
     key: str
     name: str
     tier: int
@@ -138,6 +156,59 @@ class Quest:
     stages: int
     gold: int
     renown: int
+    # Alternative openings, picked at roll time so a repeat contract still
+    # reads differently.
+    flavors: tuple[str, ...] = ()
+    # Story contracts are gated on renown and appear by chance, not by rank.
+    story: bool = False
+    min_renown: int = 0
+
+
+@dataclass(frozen=True)
+class Contract:
+    """One rolled instance of a Quest, as posted on the board.
+
+    Carries the same attributes a Quest does, so everything downstream reads
+    `contract.stages` / `.gold` / `.pool` without caring that the numbers were
+    rolled rather than authored.
+    """
+
+    quest: Quest
+    name: str
+    tier: int
+    flavor: str
+    pool: tuple[str, ...]
+    stages: int
+    gold: int
+    renown: int
+    modifiers: tuple[Modifier, ...] = ()
+    story: bool = False
+
+    @property
+    def key(self) -> str:
+        return self.quest.key
+
+    @property
+    def monster_hp_mult(self) -> float:
+        mult = 1.0
+        for m in self.modifiers:
+            mult *= m.monster_hp_mult
+        return mult
+
+    @property
+    def monster_power_mult(self) -> float:
+        mult = 1.0
+        for m in self.modifiers:
+            mult *= m.monster_power_mult
+        return mult
+
+    @property
+    def monster_armor_delta(self) -> int:
+        return sum(m.monster_armor_delta for m in self.modifiers)
+
+    @property
+    def extra_loot(self) -> int:
+        return sum(m.extra_loot for m in self.modifiers)
 
 
 # ---------------------------------------------------------------------------

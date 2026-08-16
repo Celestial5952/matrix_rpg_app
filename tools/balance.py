@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from core import combat
 from core.chargen import CLASSES, CLASSES_BY_KEY, LEVEL_RENOWN, MAX_LEVEL
-from core.content import MONSTERS, QUESTS
+from core.content import MONSTERS, QUESTS, plain_contract
 from core.game import start_run
 from core.state import Ability, Character, Quest
 
@@ -89,7 +89,8 @@ def play_one(quest: Quest, strategy, seed: int, race: str, char_class: str,
              level: int = 1) -> Result:
     char = Character(name="Sim", race_key=race, class_key=char_class,
                      renown=LEVEL_RENOWN[level - 1])
-    start_run(char, quest, seed=seed)
+    # Unrolled: modifier variance would be noise in a balance measurement.
+    start_run(char, plain_contract(quest), seed=seed)
     rng = char.run.rng
 
     turns = 0

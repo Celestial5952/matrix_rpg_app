@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import random
 
-from .content import MONSTERS
+from .content import MONSTERS, scaled_monster
 from .state import Ability, Character, Encounter, Item, Monster
 
 MONSTER_GUARD_REDUCTION = 0.5
@@ -25,8 +25,9 @@ def hp_bar(current: int, maximum: int, width: int = 10) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
-def spawn(monster_key: str, rng: random.Random) -> Encounter:
-    monster: Monster = MONSTERS[monster_key]
+def spawn(monster_key: str, rng: random.Random, contract=None) -> Encounter:
+    """Spawn a monster, scaled by any modifiers on the contract."""
+    monster: Monster = scaled_monster(MONSTERS[monster_key], contract)
     return Encounter(monster=monster, hp=monster.max_hp,
                      next_move=rng.choice(monster.moves))
 

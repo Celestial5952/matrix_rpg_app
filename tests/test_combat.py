@@ -14,7 +14,7 @@ from core.content import MONSTERS
 from core.game import start_run
 from core.state import Character
 
-from .conftest import QUESTS_BY_KEY, ability, fighting, slot
+from .conftest import CONTRACTS_BY_KEY, ability, fighting, slot
 
 
 def test_same_seed_replays_identically():
@@ -207,7 +207,7 @@ def test_every_class_kit_has_the_same_four_slots():
 def test_run_snapshots_character_stats():
     """Stat changes mid-run would let a player rebuild their sheet mid-fight."""
     char = Character(name="T", race_key="dwarf", class_key="fighter")
-    start_run(char, QUESTS_BY_KEY["cellar_rats"], seed=1)
+    start_run(char, CONTRACTS_BY_KEY["cellar_rats"], seed=1)
     assert char.run.max_hp == char.max_hp
     assert char.run.power == char.power
     assert char.run.max_focus == char.max_focus

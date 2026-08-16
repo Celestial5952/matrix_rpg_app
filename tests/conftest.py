@@ -12,11 +12,13 @@ import random
 import pytest
 
 from core import combat
-from core.content import QUESTS
+from core.content import QUESTS, plain_contract
 from core.game import handle, start_run
 from core.state import Ability, Character, Player
 
 QUESTS_BY_KEY = {q.key: q for q in QUESTS}
+# start_run takes a posted Contract; tests want the exact template numbers.
+CONTRACTS_BY_KEY = {q.key: plain_contract(q) for q in QUESTS}
 
 
 def make_player(mxid: str = "@a:srv", display_name: str = "A") -> Player:
@@ -48,7 +50,7 @@ def fighting(
 ) -> Character:
     """A character mid-encounter against a chosen monster."""
     char = Character(name="Tester", race_key=race, class_key=char_class)
-    start_run(char, QUESTS_BY_KEY[quest], seed=seed)
+    start_run(char, CONTRACTS_BY_KEY[quest], seed=seed)
     char.run.encounter = combat.spawn(monster, char.run.rng)
     return char
 

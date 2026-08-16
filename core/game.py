@@ -34,7 +34,13 @@ from .chargen import (
     spellbook_order,
     renown_for_next,
 )
-from .content import quests_for_rank
+from .content import (
+    STORY_CHANCE,
+    plain_contract,
+    quests_for_rank,
+    roll_contract,
+    story_quests,
+)
 from .items import ITEMS, SHOP_STOCK, match_items, roll_loot
 from .state import (
     MAX_NAME,
@@ -112,8 +118,12 @@ def render_board(char: Character) -> list[str]:
         "",
     ]
     for i, q in enumerate(char.board, 1):
-        lines.append(f"**{i}. {q.name}** _(tier {q.tier}, {q.stages} encounters)_")
+        tag = " ✦ **STORY**" if q.story else ""
+        lines.append(f"**{i}. {q.name}**{tag} "
+                     f"_(tier {q.tier}, {q.stages} encounters)_")
         lines.append(f"   {q.flavor}")
+        for m in q.modifiers:
+            lines.append(f"   **{m.name}** — _{m.blurb}_")
         lines.append(f"   Reward: {q.gold} gold, {q.renown} renown")
     lines.append("")
     lines.append("`!accept <n>` to take a contract.")
@@ -334,9 +344,23 @@ def _creation_input(player: Player, text: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def roll_board(char: Character, rng: random.Random | None = None) -> None:
+    """Post a fresh set of contracts.
+
+    Ordinary work is drawn by guild rank. Story contracts are gated on renown
+    instead and turn up by chance, so an established character occasionally
+    finds something waiting for them rather than earning it on a schedule.
+    """
     rng = rng or random.Random()
-    pool = quests_for_rank(char.rank)
-    char.board = rng.sample(pool, min(BOARD_SIZE, len(pool)))
+    ordinary = quests_for_rank(char.rank)
+    picks = rng.sample(ordinary, min(BOARD_SIZE, len(ordinary)))
+
+    available_story = story_quests(char.renown)
+    if available_story and rng.random() < STORY_CHANCE:
+        # Replaces the last ordinary posting rather than adding a slot, so the
+        # board stays a fixed size and the story job displaces real work.
+        picks[-1] = rng.choice(available_story)
+
+    char.board = [roll_contract(q, rng) for q in picks]
 
 
 def start_run(char: Character, quest, seed: int | None = None) -> list[str]:
@@ -352,7 +376,7 @@ def start_run(char: Character, quest, seed: int | None = None) -> list[str]:
         uses={a.key: a.uses for a in char.abilities if a.uses is not None},
         rng=rng,
     )
-    run.encounter = combat.spawn(rng.choice(quest.pool), rng)
+    run.encounter = combat.spawn(rng.choice(quest.pool), rng, quest)
     char.run = run
     return [
         f"**{quest.name}**",
@@ -383,6 +407,8 @@ def _advance_after_kill(char: Character) -> list[str]:
             f"+{run.quest.gold} gold, +{run.quest.renown} renown.",
         ]
         drops = roll_loot(run.quest.tier, run.rng)
+        for _ in range(run.quest.extra_loot):
+            drops += roll_loot(run.quest.tier, run.rng)
         for key in drops:
             char.inventory[key] = char.inventory.get(key, 0) + 1
         if drops:
@@ -408,7 +434,8 @@ def _advance_after_kill(char: Character) -> list[str]:
         lines.append("Back to the hall. `!board` to see what's up.")
         return lines
 
-    run.encounter = combat.spawn(run.rng.choice(run.quest.pool), run.rng)
+    run.encounter = combat.spawn(run.rng.choice(run.quest.pool), run.rng,
+                                 run.quest)
     return [
         "",
         f"Encounter {run.stage + 1} of {run.quest.stages}. "
