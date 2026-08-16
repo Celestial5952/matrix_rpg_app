@@ -108,6 +108,31 @@ adapters/
 tests/         pytest suite; no homeserver required
 ```
 
+## Levelling and the spellbook
+
+Renown doubles as XP — one currency, not two. Levels 1–8 raise stats gently
+(+3 HP each, +1 power every other, +1 focus every third) and, more importantly,
+unlock more abilities. Guild rank is derived from level, so the board opens up
+as you grow: tier 2 at level 3, tier 3 at level 5.
+
+Each class has a pool of eight abilities. Four are yours at level 1; the rest
+unlock as you go. `!spellbook` shows what you know, what's equipped, and what's
+still locked. `!equip <name>` or `!equip <n>` swaps one in — **in the hall only**,
+never mid-fight.
+
+**Slots are typed**: basic, signature, defence, recovery. You choose *which*
+basic attack, not *whether* you have one. Free-form slots would let a player
+equip four signatures and soft-lock the moment they ran out of focus, and the
+whole combat model assumes slot 1 is always usable.
+
+The spellbook's numbering and `!equip <n>`'s resolver share one ordering
+function on purpose. When they disagreed, `!equip 2` equipped a different
+ability than the one printed next to "2".
+
+The kit self-heals on load: an entry naming an ability that is unknown, locked,
+or in the wrong slot silently falls back to the class default rather than
+raising. A save written before a rename must not brick the character.
+
 ## Items, gold and loot
 
 `!shop` sells consumables, `!buy <n>` purchases them, `!inventory` (or `!bag`)
@@ -173,9 +198,12 @@ client; a 40-node skill constellation does not.
   against a stub client, which is not the same as proven.
 - Persistence covers the Player, Character and graveyard — an in-progress run
   doesn't survive a restart, which lands you where `flee` would have
-- **Wizard is the weakest class** (34% on tier 3 vs Fighter's 72%). Intended to
-  be the high-risk pick, but that gap wants human playtesting, not more
-  simulation
+- **Wizard is the weakest class** (36% on tier 3 at level 1 vs Fighter's 70%).
+  Intended to be the high-risk pick, but that gap wants human playtesting, not
+  more simulation
+- **Content runs out above level 5.** A level-5 party clears tier 3 at 77–97%,
+  so the Barrow Door stops being frightening well before level 8. That is a
+  content gap, not a systems one — `content.py` needs tier 4+
 - Balance is first-draft and unplaytested beyond a few fights
 - The adapter's markdown → HTML rendering only understands `**bold**`,
   `_italic_`, `` `code` `` — enough for current game text, not a general

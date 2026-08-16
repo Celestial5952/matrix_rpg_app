@@ -20,7 +20,7 @@ import statistics
 from dataclasses import dataclass
 
 from core import combat
-from core.chargen import CLASSES, CLASSES_BY_KEY
+from core.chargen import CLASSES, CLASSES_BY_KEY, LEVEL_RENOWN, MAX_LEVEL
 from core.content import MONSTERS, QUESTS
 from core.game import start_run
 from core.state import Ability, Character, Quest
@@ -85,8 +85,10 @@ class Result:
     stalled: bool = False
 
 
-def play_one(quest: Quest, strategy, seed: int, race: str, char_class: str) -> Result:
-    char = Character(name="Sim", race_key=race, class_key=char_class)
+def play_one(quest: Quest, strategy, seed: int, race: str, char_class: str,
+             level: int = 1) -> Result:
+    char = Character(name="Sim", race_key=race, class_key=char_class,
+                     renown=LEVEL_RENOWN[level - 1])
     start_run(char, quest, seed=seed)
     rng = char.run.rng
 
@@ -131,6 +133,8 @@ def main() -> int:
     ap.add_argument("--runs", type=int, default=2000, help="runs per cell")
     ap.add_argument("--quest", help="only this quest key")
     ap.add_argument("--class", dest="char_class", default="fighter")
+    ap.add_argument("--level", type=int, default=1,
+                    help=f"character level to simulate (1-{MAX_LEVEL})")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -138,12 +142,15 @@ def main() -> int:
         raise SystemExit(f"no such class: {args.char_class}. "
                          f"Try: {', '.join(CLASSES_BY_KEY)}")
 
+    if not 1 <= args.level <= MAX_LEVEL:
+        raise SystemExit(f"level must be between 1 and {MAX_LEVEL}")
+
     quests = [q for q in QUESTS if not args.quest or q.key == args.quest]
     if not quests:
         raise SystemExit(f"no such quest: {args.quest}. "
                          f"Try: {', '.join(q.key for q in QUESTS)}")
 
-    reference = CLASSES_BY_KEY[args.char_class].name
+    reference = f"Level {args.level} {CLASSES_BY_KEY[args.char_class].name}"
     print(f"{args.runs} runs per cell. Win rate, then median turns / median HP left.")
     print(f"Reference character: {reference}\n")
 
@@ -152,7 +159,7 @@ def main() -> int:
               f"{quest.gold}g / {quest.renown}r)")
         for name, strategy in STRATEGIES.items():
             rate, turns, hp, stalls = summarise([
-                play_one(quest, strategy, args.seed + i, RACE, args.char_class)
+                play_one(quest, strategy, args.seed + i, RACE, args.char_class, args.level)
                 for i in range(args.runs)
             ])
             line = (f"   {name:<22} {bar(rate)} {rate:5.1f}%   "
@@ -163,12 +170,12 @@ def main() -> int:
         print()
 
     # The axis that character creation added: does class choice actually matter?
-    print("── Class comparison  (reads_telegraphs)")
+    print(f"── Class comparison  (level {args.level}, reads_telegraphs)")
     for quest in quests:
         print(f"   {quest.name}")
         for cls in CLASSES:
             rate, turns, hp, _ = summarise([
-                play_one(quest, reads_telegraphs, args.seed + i, RACE, cls.key)
+                play_one(quest, reads_telegraphs, args.seed + i, RACE, cls.key, args.level)
                 for i in range(args.runs)
             ])
             print(f"      {cls.name:<10} {bar(rate)} {rate:5.1f}%   "
@@ -180,11 +187,11 @@ def main() -> int:
         solo = Quest(key="solo", name=key, tier=1, flavor="",
                      pool=(key,), stages=1, gold=1, renown=1)
         results = [play_one(solo, reads_telegraphs, args.seed + i,
-                            RACE, args.char_class)
+                            RACE, args.char_class, args.level)
                    for i in range(args.runs)]
         rate, _, hp, _ = summarise(results)
-        max_hp = Character(name="s", race_key=RACE,
-                           class_key=args.char_class).max_hp
+        max_hp = Character(name="s", race_key=RACE, class_key=args.char_class,
+                           renown=LEVEL_RENOWN[args.level - 1]).max_hp
         print(f"   {MONSTERS[key].name:<20} {bar(rate)} {rate:5.1f}%   "
               f"costs {max_hp - hp:>2.0f} hp")
 

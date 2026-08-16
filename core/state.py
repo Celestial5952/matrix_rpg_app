@@ -43,11 +43,18 @@ MAX_NAME = 24
 
 @dataclass(frozen=True)
 class Ability:
-    """One menu slot. kind is 'attack', 'guard' or 'heal'."""
+    """One entry in a class's pool.
+
+    kind drives resolution ('attack', 'guard', 'heal'); slot decides which
+    loadout position it can occupy ('basic', 'signature', 'defence',
+    'recovery').
+    """
 
     key: str
     name: str
     kind: str
+    slot: str = "signature"
+    unlock_level: int = 1
     cost: int = 0
     multiplier: float = 1.0
     ignores_armor: bool = False
@@ -96,7 +103,7 @@ class CharClass:
     power_mod: int
     focus_mod: int
     blurb: str
-    abilities: tuple[Ability, ...]
+    pool: tuple[Ability, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +204,8 @@ class Character:
     runs_completed: int = 0
     # item key -> count. Dies with the character, like everything else.
     inventory: dict[str, int] = field(default_factory=dict)
+    # slot -> ability key. Empty means "use the class defaults".
+    loadout: dict[str, str] = field(default_factory=dict)
     board: list[Quest] = field(default_factory=list)
     run: Run | None = None
     created_at: float = field(default_factory=time.time)
@@ -214,28 +223,53 @@ class Character:
         return CLASSES_BY_KEY[self.class_key]
 
     @property
+    def level(self) -> int:
+        from .chargen import level_for
+        return level_for(self.renown)
+
+    @property
     def max_hp(self) -> int:
-        return max(1, BASE_MAX_HP + self.char_class.hp_mod)
+        from .chargen import hp_bonus
+        return max(1, BASE_MAX_HP + self.char_class.hp_mod + hp_bonus(self.level))
 
     @property
     def power(self) -> int:
-        return max(1, BASE_POWER + self.char_class.power_mod)
+        from .chargen import power_bonus
+        return max(1, BASE_POWER + self.char_class.power_mod
+                   + power_bonus(self.level))
 
     @property
     def max_focus(self) -> int:
-        return max(0, BASE_MAX_FOCUS + self.char_class.focus_mod)
+        from .chargen import focus_bonus
+        return max(0, BASE_MAX_FOCUS + self.char_class.focus_mod
+                   + focus_bonus(self.level))
 
     @property
     def abilities(self) -> tuple[Ability, ...]:
-        return self.char_class.abilities
+        """The equipped kit, in slot order.
+
+        Self-healing: an entry that is unknown, locked, or in the wrong slot
+        falls back to the class default rather than raising. A save written
+        before an ability was renamed must not brick the character.
+        """
+        from .chargen import SLOTS, default_loadout
+        by_key = {a.key: a for a in self.char_class.pool}
+        defaults = default_loadout(self.class_key)
+        level = self.level
+
+        equipped = []
+        for slot in SLOTS:
+            ability = by_key.get(self.loadout.get(slot, ""))
+            if (ability is None or ability.slot != slot
+                    or ability.unlock_level > level):
+                ability = by_key[defaults[slot]]
+            equipped.append(ability)
+        return tuple(equipped)
 
     @property
     def rank(self) -> int:
-        if self.renown >= 40:
-            return 3
-        if self.renown >= 12:
-            return 2
-        return 1
+        from .chargen import rank_for_level
+        return rank_for_level(self.level)
 
     @property
     def in_combat(self) -> bool:

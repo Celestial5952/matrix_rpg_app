@@ -16,7 +16,7 @@ import json
 import logging
 from pathlib import Path
 
-from .chargen import CLASSES_BY_KEY, RACES_BY_KEY
+from .chargen import CLASSES_BY_KEY, RACES_BY_KEY, SLOTS
 from .items import ITEMS
 from .state import Character, Player, Tombstone
 
@@ -34,6 +34,7 @@ _CHARACTER_FIELDS: dict[str, object] = {
     "runs_completed": 0,
     "created_at": 0.0,
     "inventory": None,  # None -> {}; see _inventory_from
+    "loadout": None,    # None -> {}; see _loadout_from
 }
 
 _TOMBSTONE_FIELDS: dict[str, object] = {
@@ -52,6 +53,7 @@ def _character_from(row: object, mxid: str) -> Character | None:
         return None
     kwargs = {k: row.get(k, d) for k, d in _CHARACTER_FIELDS.items()}
     kwargs["inventory"] = _inventory_from(kwargs["inventory"])
+    kwargs["loadout"] = _loadout_from(kwargs["loadout"], kwargs["class_key"])
     # A character whose race or class was deleted from chargen.py cannot be
     # rendered or fought with. Dropping it loses that character; keeping it
     # would raise KeyError on the player's next message.
@@ -80,6 +82,29 @@ def _inventory_from(raw: object) -> dict[str, int]:
     for key, count in raw.items():
         if key in ITEMS and isinstance(count, int) and count > 0:
             out[key] = count
+    return out
+
+
+def _loadout_from(raw: object, class_key: str) -> dict[str, str]:
+    """Keep only entries naming a real ability of this class in that slot.
+
+    Character.abilities also falls back per-slot, so a bad entry could never
+    crash — but sanitising here means a renamed ability is dropped once on
+    load rather than silently ignored on every render.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    cls = CLASSES_BY_KEY.get(class_key)
+    if cls is None:
+        return {}
+    by_key = {a.key: a for a in cls.pool}
+    out: dict[str, str] = {}
+    for slot, key in raw.items():
+        if slot not in SLOTS or not isinstance(key, str):
+            continue
+        ability = by_key.get(key)
+        if ability is not None and ability.slot == slot:
+            out[slot] = key
     return out
 
 

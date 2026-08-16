@@ -21,7 +21,19 @@ from __future__ import annotations
 import random
 
 from . import combat
-from .chargen import CLASSES, RACES, find_class, find_race
+from .chargen import (
+    CLASSES,
+    MAX_LEVEL,
+    RACES,
+    SLOT_LABELS,
+    SLOTS,
+    find_ability,
+    find_class,
+    find_race,
+    known_abilities,
+    spellbook_order,
+    renown_for_next,
+)
 from .content import quests_for_rank
 from .items import ITEMS, SHOP_STOCK, match_items, roll_loot
 from .state import (
@@ -57,10 +69,13 @@ def render_classes() -> list[str]:
     lines = ["**Choose a class.**", ""]
     for i, c in enumerate(CLASSES, 1):
         mods = _mods(c.hp_mod, c.power_mod, c.focus_mod)
-        kit = " · ".join(a.name for a in c.abilities)
+        kit = " · ".join(a.name for a in c.pool if a.unlock_level <= 1)
         lines.append(f"**{i}. {c.name}** — {mods}")
         lines.append(f"   _{c.blurb}_")
         lines.append(f"   {kit}")
+        later = sum(1 for a in c.pool if a.unlock_level > 1)
+        if later:
+            lines.append(f"   _+{later} more unlocked by levelling._")
     lines.append("")
     lines.append("Reply with `!` and a number or a name — e.g. `!2`.")
     return lines
@@ -75,9 +90,12 @@ def _mods(hp: int, power: int, focus: int) -> str:
 
 
 def render_character(char: Character) -> list[str]:
+    nxt = renown_for_next(char.renown)
+    progress = "max level" if nxt is None else f"{nxt} renown to level {char.level + 1}"
     return [
-        f"**{char.title}** — Guild Rank {char.rank}",
+        f"**{char.title}** — Level {char.level} · Guild Rank {char.rank}",
         f"HP {char.max_hp} · power {char.power} · focus {char.max_focus}",
+        f"_{progress}_",
         f"Renown {char.renown} · Gold {char.gold} · "
         f"{char.runs_completed} contracts completed",
         "",
@@ -130,6 +148,55 @@ def render_combat(char: Character) -> list[str]:
         )
         lines.append("")
         lines.append(f"  **!use** — {carried}")
+    return lines
+
+
+def _ability_line(ab, equipped: bool, locked: bool, index: int | None) -> str:
+    bits = []
+    if ab.cost:
+        bits.append(f"{ab.cost} focus")
+    if ab.ignores_armor:
+        bits.append("ignores armour")
+    if ab.heal:
+        bits.append(f"heals {ab.heal}")
+    if ab.uses:
+        bits.append(f"{ab.uses}/contract")
+    if ab.focus_gain:
+        bits.append(f"+{ab.focus_gain} focus")
+    if ab.kind == "guard":
+        bits.append(f"{int((1 - ab.guard_reduction) * 100)}% less damage")
+    detail = f" _({', '.join(bits)})_" if bits else ""
+
+    if locked:
+        return f"  🔒 {ab.name} — _unlocks at level {ab.unlock_level}_"
+    suffix = "  ← **equipped**" if equipped else ""
+    return f"  **{index}.** {ab.name}{detail}{suffix}"
+
+
+def render_spellbook(char: Character) -> list[str]:
+    """Everything the class can learn, what's equipped, and what's still locked."""
+    nxt = renown_for_next(char.renown)
+    heading = f"**{char.name}'s Spellbook** — Level {char.level}"
+    if nxt is None:
+        heading += " _(max)_"
+    else:
+        heading += f" · {nxt} renown to level {char.level + 1}"
+
+    lines = [heading, ""]
+    equipped = {a.key for a in char.abilities}
+    numbering = {a.key: i for i, a in
+                 enumerate(spellbook_order(char.class_key, char.level), 1)}
+    for slot in SLOTS:
+        lines.append(f"**{SLOT_LABELS[slot]}**")
+        for ab in char.char_class.pool:
+            if ab.slot != slot:
+                continue
+            locked = ab.unlock_level > char.level
+            lines.append(_ability_line(ab, ab.key in equipped, locked,
+                                       numbering.get(ab.key)))
+        lines.append("")
+    lines.append("`!equip <name>` or `!equip <n>` to swap one in. "
+                 "The slot is decided by the ability.")
     return lines
 
 
@@ -303,10 +370,12 @@ def _advance_after_kill(char: Character) -> list[str]:
     run.stage += 1
 
     if run.stage >= run.quest.stages:
+        old_rank = char.rank
+        old_level = char.level
+        old_abilities = {a.key for a in char.abilities}
         char.gold += run.quest.gold
         char.renown += run.quest.renown
         char.runs_completed += 1
-        old_rank = char.rank
         char.run = None
         lines = [
             "",
@@ -321,8 +390,18 @@ def _advance_after_kill(char: Character) -> list[str]:
             lines.append(f"Salvaged from the bodies: **{names}**.")
         else:
             lines.append("_Nothing worth carrying home._")
+        if char.level > old_level:
+            lines.append("")
+            lines.append(f"**{char.name} reaches Level {char.level}.** "
+                         f"HP {char.max_hp} · power {char.power} · "
+                         f"focus {char.max_focus}.")
+            learned = [a for a in char.char_class.pool
+                       if old_level < a.unlock_level <= char.level]
+            if learned:
+                names = " · ".join(a.name for a in learned)
+                lines.append(f"**Learned: {names}.** `!spellbook` to equip.")
         if char.rank > old_rank:
-            lines.append(f"**{char.name} is promoted to Guild Rank {char.rank}.** "
+            lines.append(f"**Guild Rank {char.rank}.** "
                          "Harder contracts are on the board.")
         roll_board(char, run.rng)
         lines.append("")
@@ -436,6 +515,13 @@ def handle(player: Player, text: str) -> list[str] | None:
         if word in ("bag", "inventory", "items"):
             return render_inventory(char)
 
+        if word in ("equip", "swap", "learn"):
+            return ["Not mid-fight — you rewrite the book back at the hall.",
+                    "", *render_combat(char)]
+
+        if word in ("spellbook", "spells", "book", "abilities"):
+            return render_spellbook(char)
+
         if word in ("flee", "run"):
             return _flee(char)
         if word in ("status", "me", "char"):
@@ -460,6 +546,12 @@ def handle(player: Player, text: str) -> list[str] | None:
         if not 0 <= idx < len(char.board):
             return [f"There's no contract {parts[1]} on the board."]
         return start_run(char, char.board[idx])
+
+    if word in ("spellbook", "spells", "book", "abilities"):
+        return render_spellbook(char)
+
+    if word in ("equip", "swap", "learn"):
+        return _equip(char, parts[1:])
 
     if word in ("shop", "quartermaster", "store"):
         return render_shop(char)
@@ -502,6 +594,43 @@ def _resolve_ability(char: Character, word: str):
         if token == ab.key or token == ab.name.lower().split()[0]:
             return ab
     return None
+
+
+def _equip(char: Character, args: list[str]) -> list[str]:
+    """Swap an ability into its slot. The slot is implied by the ability."""
+    unlocked = spellbook_order(char.class_key, char.level)
+    if not args:
+        return ["Equip what? `!equip sunder`, or `!equip 5` by number.",
+                "", *render_spellbook(char)]
+
+    matches = find_ability(args[0], unlocked)
+    if not matches:
+        # Distinguish "not a thing" from "not yet".
+        everything = char.char_class.pool
+        locked = find_ability(args[0], [a for a in everything
+                                        if a.unlock_level > char.level])
+        if locked:
+            ab = locked[0]
+            return [f"**{ab.name}** unlocks at level {ab.unlock_level}. "
+                    f"You are level {char.level}."]
+        return [f"No such ability: '{args[0]}'.", "", *render_spellbook(char)]
+
+    if len(matches) > 1:
+        return ["Which one? " + " · ".join(m.name for m in matches)]
+
+    ability = matches[0]
+    current = {a.slot: a for a in char.abilities}[ability.slot]
+    if current.key == ability.key:
+        return [f"**{ability.name}** is already in your {SLOT_LABELS[ability.slot].lower()} slot."]
+
+    char.loadout[ability.slot] = ability.key
+    return [
+        f"**{ability.name}** replaces **{current.name}** "
+        f"in the {SLOT_LABELS[ability.slot].lower()} slot.",
+        "",
+        "**Your kit** — " + " · ".join(
+            f"`!{i}` {a.name}" for i, a in enumerate(char.abilities, 1)),
+    ]
 
 
 def _buy(char: Character, args: list[str]) -> list[str]:
@@ -616,6 +745,8 @@ def _help(player: Player) -> list[str]:
         "  `!create` — roll a new one _(only when you have none)_",
         "  `!status` — your sheet · also `!me` `!char` `!sheet`",
         "  `!inventory` — what you're carrying · also `!bag` `!items`",
+        "  `!spellbook` — abilities known and equipped · also `!spells`",
+        "  `!equip <name>` — swap an ability into its slot",
         "  `!graveyard` — your fallen",
         "",
         "**Guild hall**",
