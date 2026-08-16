@@ -90,10 +90,39 @@ def test_empty_input_is_ignored():
 
 def test_nothing_works_before_a_character_exists():
     player = make_player()
-    for cmd in ("!board", "!accept 1", "!status", "!help"):
+    for cmd in ("!board", "!accept 1", "!status"):
         reply = handle(player, cmd)
         assert reply is not None
         assert "no character" in reply[0].lower()
+
+
+def test_help_lists_commands_in_every_state():
+    """A player who cannot see a command cannot learn it exists."""
+    expected = ("!create", "!board", "!accept", "!status", "!inventory",
+                "!shop", "!buy", "!use", "!flee", "!graveyard", "!help")
+
+    # no character
+    player = make_player()
+    text = " ".join(handle(player, "!help"))
+    for cmd in expected:
+        assert cmd in text, f"{cmd} missing before character creation"
+
+    # in the hall
+    player = make_char(name="Helpy")
+    text = " ".join(handle(player, "!help"))
+    for cmd in expected:
+        assert cmd in text, f"{cmd} missing in the hall"
+    assert "Helpy" in text, "help should say who you are"
+
+    # mid-fight
+    handle(player, "!board")
+    handle(player, "!accept 1")
+    lines = handle(player, "!help")
+    text = " ".join(lines)
+    for cmd in expected:
+        assert cmd in text, f"{cmd} missing in combat"
+    for ability in player.character.abilities:
+        assert ability.name in text, f"{ability.name} missing from combat help"
 
 
 def test_chatter_is_still_ignored_before_a_character_exists():

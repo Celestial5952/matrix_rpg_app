@@ -395,7 +395,9 @@ def handle(player: Player, text: str) -> list[str] | None:
             return begin_creation(player)
         if word == "graveyard":
             return render_graveyard(player)
-        if word in ("help", "board", "quests", "status", "accept", "me"):
+        if word == "help":
+            return _help(player)
+        if word in ("board", "quests", "status", "accept", "me"):
             return [
                 "You have no character. `!create` to make one.",
                 "",
@@ -439,7 +441,7 @@ def handle(player: Player, text: str) -> list[str] | None:
         if word in ("status", "me", "char"):
             return render_character(char)
         if word == "help":
-            return _help(char)
+            return _help(player)
         return None
 
     # 4. Guild hall.
@@ -485,7 +487,7 @@ def handle(player: Player, text: str) -> list[str] | None:
         ]
 
     if word == "help":
-        return _help(char)
+        return _help(player)
 
     return None
 
@@ -589,25 +591,44 @@ def _flee(char: Character) -> list[str]:
     ]
 
 
-def _help(char: Character) -> list[str]:
-    if char.in_combat:
-        slots = " · ".join(
-            f"`!{i}` {ab.name}" for i, ab in enumerate(char.abilities, 1)
-        )
-        return [
-            "**In combat** — reply with `!` and a number, or the ability's name:",
-            slots,
-            "`!use <item>` to spend a consumable — it costs your turn.",
-            "`!flee` to abandon the contract · `!status` for your sheet.",
-        ]
-    return [
-        "**Guild Hall**",
-        "`!board` — read the quest board",
-        "`!accept <n>` — take a contract",
-        "`!status` — your character sheet",
-        "`!shop` — buy consumables · `!buy <n>`",
-        "`!bag` — what you're carrying",
-        "`!graveyard` — your fallen",
+def _help(player: Player) -> list[str]:
+    """The full command surface, with the current context called out first.
+
+    Everything is listed in every state rather than hidden when unavailable —
+    a player who cannot see a command cannot learn it exists.
+    """
+    char = player.character
+    lines = ["**Commands** — every one starts with `!`", ""]
+
+    if char is None:
+        lines.append("_You have no character. `!create` is the only thing that "
+                     "will do anything._")
+    elif char.in_combat:
+        slots = " · ".join(f"`!{i}` {ab.name}"
+                           for i, ab in enumerate(char.abilities, 1))
+        lines.append(f"_In a fight. Your moves: {slots}_")
+    else:
+        lines.append(f"_In the guild hall as {char.name}._")
+
+    lines += [
         "",
-        "Every command starts with `!` — anything else is just conversation.",
+        "**Character**",
+        "  `!create` — roll a new one _(only when you have none)_",
+        "  `!status` — your sheet · also `!me` `!char` `!sheet`",
+        "  `!inventory` — what you're carrying · also `!bag` `!items`",
+        "  `!graveyard` — your fallen",
+        "",
+        "**Guild hall**",
+        "  `!board` — read the quest board · also `!quests`",
+        "  `!accept <n>` — take a contract",
+        "  `!shop` — the quartermaster's stock",
+        "  `!buy <n>` — buy one · `!buy <n> <qty>` for more",
+        "",
+        "**In a fight**",
+        "  `!1` `!2` `!3` `!4` — your four abilities, or type their names",
+        "  `!use <item>` — spend a consumable, costs your turn",
+        "  `!flee` — abandon the contract, keep your life",
+        "",
+        "  `!help` — this list",
     ]
+    return lines
