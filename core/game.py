@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import difflib
 import random
+import time
 
 from . import combat
 from .adventures import ADVENTURES, contract_for
@@ -37,6 +38,9 @@ from .chargen import (
     renown_for_next,
 )
 from .guild import Guild, contribution
+from .duel import BAR_DUTY_HOURS, WIN_RENOWN, Duel, Duels
+from .duel import is_legal as duel_legal
+from .duel import resolve as duel_resolve
 from .party import MAX_PARTY, Parties, Party, scaled_for_party
 from .content import (
     STORY_CHANCE,
@@ -133,6 +137,7 @@ COMMANDS: tuple[str, ...] = (
     "bag", "inventory", "items", "use", "spellbook", "spells", "book",
     "abilities", "equip", "swap", "graveyard", "who", "guild", "flee", "run",
     "portal", "townportal", "tp", "escape", "give", "gift", "hand",
+    "duel", "challenge", "party", "invite", "join", "leave", "disband",
 )
 
 
@@ -198,7 +203,9 @@ def render_character(char: Character) -> list[str]:
         f"❤️ {char.max_hp} · 💪 {char.power} · ✨ {char.max_focus}",
         f"_{progress}_",
         f"🏅 {char.renown} renown · 💰 {char.gold} gold · "
-        f"📜 {char.runs_completed} contracts completed",
+        f"📜 {char.runs_completed} contracts completed"
+        + (f" · ⚔️ {char.duels_won}W/{char.duels_lost}L"
+           if char.duels_won or char.duels_lost else ""),
         "",
         "**Abilities**",
         *[f"  **{i}.** {SLOT_ICONS.get(a.slot, '✦')} {a.name} — _{a.blurb}_"
@@ -222,7 +229,8 @@ def _current_contract_lines(char: Character) -> list[str]:
     return lines
 
 
-def render_board(char: Character) -> list[str]:
+def render_board(char: Character,
+                 roster: dict[str, Player] | None = None) -> list[str]:
     lines = [
         f"📜 **The Quest Board** — {char.name}, Guild Rank {char.rank} · "
         f"{char.renown} renown · {char.gold} gold",
@@ -238,6 +246,17 @@ def render_board(char: Character) -> list[str]:
         lines.append(f"   💰 {q.gold} gold · 🏅 {q.renown} renown")
     lines.append("")
     lines.append("`!accept <n>` to take a contract · `!refresh` for new work.")
+
+    on_duty = [p.character for p in (roster or {}).values()
+               if p.character is not None and p.character.on_bar_duty]
+    if on_duty:
+        lines.append("")
+        lines.append("🍺 **Behind the bar** _(lost a duel, not taking work)_")
+        for other in sorted(on_duty, key=lambda c: -c.barmaid_until):
+            lines.append(f"  **{other.name}** — {other.bar_duty_remaining} left")
+    if char.on_bar_duty:
+        lines.append("")
+        lines.append(f"_Including you, for another {char.bar_duty_remaining}._")
     return lines
 
 
@@ -1088,6 +1107,182 @@ def _party_action(player: Player, party: Party, ability,
     return lines + ["", *render_party_combat(party, roster)]
 
 
+# ---------------------------------------------------------------------------
+# duels
+# ---------------------------------------------------------------------------
+
+def render_duel(duel: Duel, viewer: str) -> list[str]:
+    left, right = duel.combatants
+    lines = ["⚔️ **DUEL** ⚔️", ""]
+    for side in (left, right):
+        marker = "▶" if duel.turn == side.mxid else " "
+        you = " _(you)_" if side.mxid == viewer else ""
+        if side.standing:
+            lines.append(f"  {marker} **{side.name}**{you}  "
+                         f"{combat.hp_bar(side.hp, side.max_hp)} "
+                         f"{side.hp}/{side.max_hp} · ✨ {side.focus}/{side.max_focus}")
+        else:
+            lines.append(f"  {marker} 💀 **{side.name}**{you} — _beaten_")
+    if duel.wager:
+        lines.append("")
+        lines.append(f"💰 _{duel.wager} gold on the outcome._")
+    return lines
+
+
+def _duel_finish(duel: Duel, winner_mxid: str, roster: dict[str, Player] | None,
+                 duels: Duels) -> list[str]:
+    """Settle up. Nobody dies; the loser is beaten and the wager moves."""
+    winner = (roster or {}).get(winner_mxid)
+    loser_mxid = duel.other(winner_mxid).mxid
+    loser = (roster or {}).get(loser_mxid)
+
+    lines = ["", f"🏆 **{duel.duelist(winner_mxid).name} WINS** 🏆"]
+    if winner and winner.character:
+        winner.character.duels_won += 1
+        winner.character.renown += WIN_RENOWN
+    if loser and loser.character:
+        loser.character.duels_lost += 1
+        loser.character.barmaid_until = time.time() + BAR_DUTY_HOURS * 3600
+
+    if duel.wager and winner and loser and winner.character and loser.character:
+        paid = min(duel.wager, loser.character.gold)
+        loser.character.gold -= paid
+        winner.character.gold += paid
+        if paid < duel.wager:
+            lines.append(f"_{loser.character.name} could only cover **{paid}** "
+                         f"of the {duel.wager}. Embarrassing for everyone._")
+        else:
+            lines.append(f"💰 **{paid}** gold changes hands.")
+
+    lines += [
+        f"_{duel.duelist(loser_mxid).name} is helped up, mostly intact. "
+        "Nobody dies in the yard — that is what contracts are for._",
+        "",
+        f"🍺 **{duel.duelist(loser_mxid).name} is put on bar duty for "
+        f"{BAR_DUTY_HOURS} hours.**",
+        "_An apron is produced. It is not optional. The board will say so._",
+        "",
+        f"_Record: {duel.duelist(winner_mxid).name} "
+        f"{winner.character.duels_won if winner and winner.character else 0}W, "
+        f"{duel.duelist(loser_mxid).name} "
+        f"{loser.character.duels_lost if loser and loser.character else 0}L._",
+    ]
+    duels.end(duel)
+    return lines
+
+
+def _duel_action(player: Player, duel: Duel, ability,
+                 roster: dict[str, Player] | None, duels: Duels) -> list[str]:
+    me = duel.duelist(player.mxid)
+    them = duel.other(player.mxid)
+
+    lines = duel_resolve(me, them, ability, duel.rng)
+    if not them.standing:
+        them.hp = 0
+        return lines + _duel_finish(duel, player.mxid, roster, duels)
+
+    duel.turn = them.mxid
+    return lines + ["", *render_duel(duel, player.mxid)]
+
+
+def _duel_commands(player: Player, parts: list[str],
+                   roster: dict[str, Player] | None, duels: Duels | None,
+                   parties: Parties | None) -> list[str]:
+    if duels is None:
+        return ["Duelling isn't available right now."]
+
+    char = player.character
+    assert char is not None
+    live = duels.for_player(player.mxid)
+    if live is not None:
+        return ["You're already in a duel. _There is no leaving one._", "",
+                *render_duel(live, player.mxid)]
+
+    action = parts[0].lower() if parts else ""
+
+    if action in ("accept", "yes", "fight"):
+        pending = duels.pending_for(player.mxid)
+        if not pending:
+            return ["Nobody has challenged you. _Yet._"]
+        duel = pending[0]
+        challenger = (roster or {}).get(duel.challenger)
+        if challenger is None or challenger.character is None:
+            duels.end(duel)
+            return ["Your challenger seems to have stopped existing."]
+        if challenger.character.run is not None or char.run is not None:
+            return ["One of you is out on a contract. _Settle that first._"]
+
+        duels.begin(duel, challenger.character, char)
+        first = duel.duelist(duel.turn).name
+        return [
+            "⚔️ **THE CHALLENGE IS ACCEPTED** ⚔️",
+            f"_{challenger.character.name} and {char.name} take the yard. "
+            "The clerk puts down her quill and comes to the window._",
+            "",
+            "**There is no withdrawing now.** No portal, no contracts, no "
+            "leaving until one of you is on the floor.",
+            f"_{first} moves first._",
+            "",
+            *render_duel(duel, player.mxid),
+        ]
+
+    if action in ("decline", "no", "refuse"):
+        pending = duels.pending_for(player.mxid)
+        if not pending:
+            return ["Nobody has challenged you."]
+        for duel in pending:
+            duels.end(duel)
+        return ["_You decline. That is your right, right up until you accept._"]
+
+    if not parts:
+        pending = duels.pending_for(player.mxid)
+        if pending:
+            names = " · ".join(
+                _name_of(d.challenger, roster) +
+                (f" _(for {d.wager}g)_" if d.wager else "") for d in pending)
+            return [f"⚔️ **You have been challenged by** {names}.",
+                    "`!duel accept` — binding, no way out · `!duel decline`"]
+        return ["`!duel <who>` to challenge someone · "
+                "`!duel <who> <gold>` to put coin on it."]
+
+    if char.run is not None:
+        return ["You're out on a contract. _Finish it first._"]
+    if parties and (party := parties.for_member(player.mxid)) and party.on_contract:
+        return ["Your party is mid-contract. _Finish it first._"]
+
+    people = _match_players(parts[0], roster or {}, player.mxid)
+    if not people:
+        return [f"Nobody here called '{parts[0]}'."]
+    if len(people) > 1:
+        return ["Which one? " + " · ".join(p.character.name for p in people)]
+    target = people[0]
+
+    if duels.for_player(target.mxid) is not None:
+        return [f"**{target.character.name}** is already fighting somebody."]
+    if target.character.run is not None:
+        return [f"**{target.character.name}** is out on a contract."]
+
+    wager = 0
+    if len(parts) > 1:
+        if not parts[1].isdigit():
+            return ["Wager what? `!duel wren 20`"]
+        wager = int(parts[1])
+        if wager > char.gold:
+            return [f"You have {char.gold} gold. _Bold, though._"]
+
+    if any(d.opponent == target.mxid for d in duels.issued_by(player.mxid)):
+        return [f"You've already challenged **{target.character.name}**. "
+                "_Let them answer._"]
+
+    duels.challenge(player.mxid, target.mxid, wager)
+    stake = f" with **{wager}** gold on it" if wager else ""
+    return [
+        f"⚔️ **{char.name} calls out {target.character.name}**{stake}.",
+        f"_{target.character.name} answers with_ `!duel accept` "
+        "_— which cannot be taken back._",
+    ]
+
+
 def render_guild(guild: Guild | None,
                  roster: dict[str, Player] | None) -> list[str]:
     if guild is None:
@@ -1126,7 +1321,8 @@ def render_guild(guild: Guild | None,
 def handle(player: Player, text: str,
            roster: dict[str, Player] | None = None,
            guild: Guild | None = None,
-           parties: Parties | None = None) -> list[str] | None:
+           parties: Parties | None = None,
+           duels: Duels | None = None) -> list[str] | None:
     raw = text.strip()
     # The only gate that matters: no `!`, no reaction. Applies in every state,
     # so ordinary conversation can never be mistaken for input.
@@ -1165,6 +1361,42 @@ def handle(player: Player, text: str,
 
     char = player.character
     party = parties.for_member(player.mxid) if parties else None
+    duel = duels.for_player(player.mxid) if duels else None
+
+    # 2b. A live duel is exclusive and binding. Nothing else runs until it
+    #     is settled — that is the whole point of accepting one.
+    if duel is not None:
+        ability = _resolve_ability(char, word)
+        if ability is not None:
+            if duel.turn != player.mxid:
+                return [f"_Wait._ It's **{duel.other(player.mxid).name}**'s move.",
+                        "", *render_duel(duel, player.mxid)]
+            usable, why = duel_legal(duel.duelist(player.mxid), ability)
+            if not usable:
+                return [why, "", *render_duel(duel, player.mxid)]
+            return _duel_action(player, duel, ability, roster, duels)
+
+        if word == "duel":
+            return render_duel(duel, player.mxid)
+        if word in ("portal", "townportal", "tp", "escape", "flee", "run",
+                    "leave", "disband"):
+            return [
+                "🚪 _There is no door._",
+                f"You agreed to this. **{duel.other(player.mxid).name}** is "
+                "still standing, and so are you.",
+                "", *render_duel(duel, player.mxid),
+            ]
+        if word in ("accept", "take", "board", "quests", "quest", "party",
+                    "invite", "join", "use", "shop", "buy", "give", "equip"):
+            return ["Not in the middle of a duel.", "",
+                    *render_duel(duel, player.mxid)]
+        if word in ("status", "me", "char", "sheet"):
+            return render_character(char)
+        if word == "help":
+            return _help(player)
+        if word.isdigit():
+            return [f"There's no action {word}."]
+        return _unknown(word, ["You're in a duel — `!1`–`!4`."])
 
     # 3a. Party combat. The shared encounter is reachable only through here,
     #     and only by members whose turn it is.
@@ -1235,6 +1467,9 @@ def handle(player: Player, text: str,
         if word in ("spellbook", "spells", "book", "abilities"):
             return render_spellbook(char)
 
+        if word in ("duel", "challenge"):
+            return ["You're out on a contract. _Finish it first._"]
+
         if word in ("portal", "townportal", "tp", "escape", "flee", "run"):
             return _portal(char)
         if word in ("status", "me", "char"):
@@ -1252,17 +1487,24 @@ def handle(player: Player, text: str,
     if word in ("board", "quests", "quest"):
         if not char.board or len(char.board) != _board_size(guild):
             roll_board(char, size=_board_size(guild))
-        return render_board(char)
+        return render_board(char, roster)
 
     if word in ("accept", "take"):
         if not char.board:
             roll_board(char, size=_board_size(guild))
-            return ["You haven't read the board yet.", "", *render_board(char)]
+            return ["You haven't read the board yet.", "", *render_board(char, roster)]
         if len(parts) < 2 or not parts[1].isdigit():
             return ["Which one? `!accept 1`, `!accept 2`…"]
         idx = int(parts[1]) - 1
         if not 0 <= idx < len(char.board):
             return [f"There's no contract {parts[1]} on the board."]
+
+        if char.on_bar_duty:
+            return _bar_duty_refusal(char)
+
+        if duels is not None and duels.pending_for(player.mxid):
+            return ["⚔️ Somebody has called you out. _Answer it first._",
+                    "`!duel accept` or `!duel decline`."]
 
         if party is not None:
             if party.leader != player.mxid:
@@ -1288,6 +1530,9 @@ def handle(player: Player, text: str,
 
     # Note: `create` is deliberately absent — it belongs to character
     # creation. A party is started with `!party`.
+    if word in ("duel", "challenge", "fight"):
+        return _duel_commands(player, parts[1:], roster, duels, parties)
+
     if word in ("party", "invite", "ask", "join", "leave", "disband"):
         handled = _party_commands(player, word, parts[1:], roster, parties)
         if handled is not None:
@@ -1607,6 +1852,16 @@ def _party_portal(player: Player, party: Party,
     ]
 
 
+def _bar_duty_refusal(char: Character) -> list[str]:
+    return [
+        f"🍺 **You are behind the bar for another {char.bar_duty_remaining}.**",
+        "_You lost a duel. The apron stays on. Somebody wants a second ale "
+        "and it is, regrettably, your problem._",
+        "",
+        "_You can still spend, browse, and be challenged — just not work._",
+    ]
+
+
 def _refresh_board(char: Character, guild: Guild | None = None) -> list[str]:
     """Pay to have the board rewritten. Gives gold a second sink."""
     if char.gold < REROLL_COST:
@@ -1616,7 +1871,7 @@ def _refresh_board(char: Character, guild: Guild | None = None) -> list[str]:
     roll_board(char, size=_board_size(guild))
     return [f"_The clerk takes your {REROLL_COST}g, tears everything down, and "
             f"pins up fresh work with a flourish._ ✂️",
-            "", *render_board(char)]
+            "", *render_board(char, roster)]
 
 
 def _buy(char: Character, args: list[str]) -> list[str]:
@@ -1666,6 +1921,8 @@ def _use_in_hall(char: Character, args: list[str]) -> list[str]:
         return ["Which one? " + " · ".join(m.name for m in matches)]
 
     item = matches[0]
+    if item.kind == "scroll" and char.on_bar_duty:
+        return _bar_duty_refusal(char)
     if item.kind != "scroll":
         return [f"**{item.name}** is for when it's going badly, not for "
                 "standing about in a guild hall.",
@@ -1790,13 +2047,10 @@ def _help(player: Player) -> list[str]:
         "**Character**",
         "  `!create` — roll a new one _(only when you have none)_",
         "  `!status` — your sheet · also `!me` `!char` `!sheet`",
+        "  `!spellbook` — abilities known, equipped and locked · also `!spells`",
+        "  `!equip <name>` — swap an ability into its slot _(hall only)_",
         "  `!inventory` — what you're carrying · also `!bag` `!items`",
-        "  `!spellbook` — abilities known and equipped · also `!spells`",
-        "  `!equip <name>` — swap an ability into its slot",
         "  `!graveyard` — your fallen",
-        "  `!who` — everyone on the guild's books",
-        "  `!guild` — the charter, and what it buys everyone",
-        "  `!give <who> <item>` — hand something over",
         "",
         "**Guild hall**",
         "  `!board` — read the quest board · also `!quests`",
@@ -1804,12 +2058,28 @@ def _help(player: Player) -> list[str]:
         f"  `!refresh` — new contracts on the board ({REROLL_COST}g)",
         "  `!shop` — the quartermaster's stock",
         "  `!buy <n>` — buy one · `!buy <n> <qty>` for more",
+        "  `!give <who> <item>` — hand something over",
+        "  `!who` — everyone on the books · `!guild` — the charter",
+        "",
+        "**Party** _(share a monster, not a health bar)_",
+        f"  `!party` — start one, or see yours _(up to {MAX_PARTY})_",
+        "  `!invite <who>` — leader only · `!join <leader>` to accept",
+        "  `!leave` · `!disband` — hall only, not mid-contract",
         "",
         "**In a fight**",
         "  `!1` `!2` `!3` `!4` — your four abilities, or type their names",
         "  `!use <item>` — spend a consumable, costs your turn",
+        "  `!use <scroll>` — open an adventure _(hall only)_",
         "  `!portal` — bail out. No rewards, and she will remember",
+        "",
+        "**Duels** _(consensual, binding, non-lethal)_",
+        "  `!duel <who>` — challenge · `!duel <who> <gold>` to put coin on it",
+        "  `!duel accept` — take it. There is no backing out",
+        "  `!duel decline` — refuse, before it starts",
+        f"  _Lose and you're on bar duty for {BAR_DUTY_HOURS}h — no contracts,",
+        "  and the board tells everybody._",
         "",
         "  `!help` — this list",
     ]
+    return lines
     return lines

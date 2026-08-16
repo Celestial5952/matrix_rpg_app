@@ -324,6 +324,11 @@ class Character:
     runs_completed: int = 0
     # How many times you've bailed. The clerk keeps score; nothing else does.
     portals_used: int = 0
+    duels_won: int = 0
+    duels_lost: int = 0
+    # Unix timestamp until which this character is stuck behind the bar,
+    # having lost a duel. Publicly visible on the board.
+    barmaid_until: float = 0.0
     # item key -> count. Dies with the character, like everything else.
     inventory: dict[str, int] = field(default_factory=dict)
     # slot -> ability key. Empty means "use the class defaults".
@@ -396,6 +401,16 @@ class Character:
     @property
     def in_combat(self) -> bool:
         return self.run is not None and self.run.encounter is not None
+
+    @property
+    def on_bar_duty(self) -> bool:
+        return self.barmaid_until > time.time()
+
+    @property
+    def bar_duty_remaining(self) -> str:
+        seconds = max(0, int(self.barmaid_until - time.time()))
+        hours, minutes = divmod(seconds // 60, 60)
+        return f"{hours}h {minutes:02d}m" if hours else f"{minutes}m"
 
     @property
     def carried(self) -> int:

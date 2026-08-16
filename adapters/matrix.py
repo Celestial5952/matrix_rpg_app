@@ -46,6 +46,7 @@ from nio import (
 
 from core.game import handle
 from core.guild import Guild
+from core.duel import Duels
 from core.party import Parties
 from core.persist import load_all, load_guild, save_all, save_guild
 from core.state import Player
@@ -120,6 +121,9 @@ class Bot:
         # fight into several identical solo ones -- so a restart ends party
         # contracts, and core.persist drops any run carrying a party_key.
         self.parties: Parties = Parties()
+        # Duels are in-memory for the same reason as parties: the state is
+        # shared between two players and cannot be restored per-player.
+        self.duels: Duels = Duels()
         # mxid -> {"root": event_id, "frame": event_id}. A fight is one message
         # in the room that we keep editing; outcomes go in a thread off it.
         # Deliberately not persisted: after a restart the event ids may no
@@ -216,7 +220,7 @@ class Bot:
         # unhandled exception in game logic takes the bot down for everyone.
         try:
             reply = handle(player, event.body, self.players, self.guild,
-                           self.parties)
+                           self.parties, self.duels)
         except Exception:
             log.exception("handle() raised on %r from %s", event.body, event.sender)
             await self._send(["Something went wrong resolving that. "

@@ -38,6 +38,9 @@ _CHARACTER_FIELDS: dict[str, object] = {
     "gold": 0,
     "runs_completed": 0,
     "portals_used": 0,
+    "duels_won": 0,
+    "duels_lost": 0,
+    "barmaid_until": 0.0,
     "created_at": 0.0,
     "inventory": None,  # None -> {}; see _inventory_from
     "loadout": None,    # None -> {}; see _loadout_from
@@ -65,6 +68,8 @@ def _character_from(row: object, mxid: str) -> Character | None:
     if not isinstance(row, dict):
         return None
     kwargs = {k: row.get(k, d) for k, d in _CHARACTER_FIELDS.items()}
+    if not isinstance(kwargs["barmaid_until"], (int, float)):
+        kwargs["barmaid_until"] = 0.0
     kwargs["inventory"] = _inventory_from(kwargs["inventory"])
     kwargs["loadout"] = _loadout_from(kwargs["loadout"], kwargs["class_key"])
     run = _run_from_dict(row.get("run"))

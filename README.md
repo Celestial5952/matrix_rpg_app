@@ -339,7 +339,35 @@ Parties are in-memory only. A party run is shared state that cannot be restored
 per-member without forking one fight into several identical solo ones, so a
 restart ends party contracts and `persist` drops any run carrying a `party_key`.
 
-Not built: PvP, trading gold, parties surviving a restart.
+## Duels
+
+`!duel <who>` challenges, `!duel accept` takes it, `!duel <who> <gold>` puts
+coin on it. Turn-based against the other player's character, using the same
+abilities.
+
+**Consensual**: nothing starts without acceptance, and a pending challenge
+cannot be dodged by wandering off on a contract.
+
+**Binding**: once accepted there is no withdrawing. `!portal` says there is no
+door. Contracts, shopping, parties and items are all refused until it settles.
+
+**Non-lethal, but not free.** The loser is beaten rather than killed — pairing
+"no escape" with permadeath would mean one accepted challenge could end a
+character somebody spent hours on, which makes duelling a griefing vector and
+something nobody does twice. Instead the loser is put on **bar duty for 8
+hours**: no contracts, no adventures, and the quest board publishes the name
+and the time remaining for everyone to read. Shopping and being challenged
+still work — an apron is not a shield.
+
+Bar duty is stored on the Character, so it survives a restart (you cannot wait
+out an apron by rebooting the bot) and dies with the character (a fresh one
+starts clean).
+
+Duellists fight from a fresh copy of their kit — full health, full focus, full
+charges — so a duel never spends the consumables a contract needs, and winning
+is not a question of who shopped more recently.
+
+Not built: trading gold, parties or duels surviving a restart.
 
 ## Characters and permadeath
 
