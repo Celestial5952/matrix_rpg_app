@@ -171,6 +171,26 @@ the board stays a fixed size and a story job costs you real work. Add a `Quest`
 with `story=True` and a `min_renown` and it enters the rotation; nothing else
 needs changing. `The Sealed Name` at 30 renown is the first one.
 
+## Saying what an ability does
+
+Two separate jobs, kept separate:
+
+- **The blurb** says what an ability is *for*, in plain language. Evocative is
+  fine; obscure is not. "A rime shell. Buys a turn and refills the well." told
+  a player nothing they could act on and is now "A shell of ice. Absorbs most
+  of the next hit and restores focus."
+- **The detail** says what it costs and does, in the same order everywhere:
+  damage multiplier, focus cost, armour, mitigation, healing, charges.
+
+The character sheet used to print flavour and *no numbers at all*, which made
+`!status` useless for deciding anything. It now carries both, as does the
+spellbook. The fight menu keeps a compact form — cost, charges remaining,
+armour-piercing, mitigation — because that is what you choose on, and the full
+description would bury the health bars.
+
+Damage multipliers are shown because without them two basic attacks both read
+"(free)" and nothing distinguishes them.
+
 ## Levelling and the spellbook
 
 Renown doubles as XP — one currency, not two. Levels 1–8 raise stats gently

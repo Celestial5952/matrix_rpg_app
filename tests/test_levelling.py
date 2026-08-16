@@ -239,3 +239,45 @@ def test_losing_a_level_downgrades_gracefully():
     char.renown = 0
     assert char.level == 1
     assert char.abilities[1].key == "cleave", "locked ability should fall back"
+
+
+# --- readability -----------------------------------------------------------
+
+def test_every_ability_explains_itself():
+    """Blurbs say what an ability is for; details say what it costs and does."""
+    from core.game import _ability_detail
+
+    for cls in CLASSES:
+        for ability in cls.pool:
+            assert ability.blurb, f"{cls.name}/{ability.key} has no blurb"
+            assert ability.blurb[0].isupper(), ability.key
+            assert ability.blurb.endswith("."), ability.key
+
+            detail = _ability_detail(ability)
+            assert detail, f"{cls.name}/{ability.key} shows no numbers"
+
+            if ability.kind == "attack":
+                assert "damage" in detail, ability.key
+                assert ("free" in detail) == (ability.cost == 0), ability.key
+            if ability.ignores_armor:
+                assert "ignores armour" in detail, ability.key
+            if ability.kind == "guard":
+                assert "damage taken" in detail, ability.key
+            if ability.heal:
+                assert f"heals {ability.heal}" in detail, ability.key
+
+
+def test_the_character_sheet_shows_numbers_not_just_flavour():
+    player = at_level(3, char_class="wizard")
+    text = " ".join(handle(player, "!status"))
+    for ability in player.character.abilities:
+        assert ability.name in text
+    assert "focus" in text and "damage" in text
+
+
+def test_the_fight_menu_flags_armour_piercing():
+    """The one tactical fact worth the space in a compact menu."""
+    player = at_level(3, char_class="wizard")
+    handle(player, "!board")
+    text = " ".join(handle(player, "!accept 1"))
+    assert "ignores armour" in text

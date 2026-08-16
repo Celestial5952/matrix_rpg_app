@@ -208,8 +208,11 @@ def render_character(char: Character) -> list[str]:
            if char.duels_won or char.duels_lost else ""),
         "",
         "**Abilities**",
-        *[f"  **{i}.** {SLOT_ICONS.get(a.slot, '✦')} {a.name} — _{a.blurb}_"
-          for i, a in enumerate(char.abilities, 1)],
+        *[line for i, a in enumerate(char.abilities, 1) for line in (
+            f"  **{i}.** {SLOT_ICONS.get(a.slot, '✦')} **{a.name}** "
+            f"_({_ability_detail(a)})_",
+            f"       _{a.blurb}_",
+        )],
         *_current_contract_lines(char),
     ]
 
@@ -275,14 +278,9 @@ def render_combat(char: Character) -> list[str]:
         "",
     ]
     for i, (ab, usable, _why) in enumerate(combat.available_actions(char), 1):
-        suffix = ""
-        if ab.cost:
-            suffix = f" _({ab.cost} focus)_"
-        elif ab.uses is not None:
-            suffix = f" _({run.uses.get(ab.key, 0)} left)_"
         mark = f"**!{i}**" if usable else f"~~!{i}~~"
         icon = SLOT_ICONS.get(ab.slot, "✦")
-        lines.append(f"  {mark} {icon} {ab.name}{suffix}")
+        lines.append(f"  {mark} {icon} {ab.name}{_combat_detail(ab, run)}")
     if char.inventory:
         lines.append("")
         # Numbering matches `!use <n>`, which resolves against sorted bag order.
@@ -295,26 +293,60 @@ def render_combat(char: Character) -> list[str]:
     return lines
 
 
-def _ability_line(ab, equipped: bool, locked: bool, index: int | None) -> str:
+def _ability_detail(ab) -> str:
+    """The numbers, in the same order everywhere they appear.
+
+    Blurbs say what an ability is for; this says what it costs and does. Both
+    are needed — the sheet used to show flavour and no numbers at all, which
+    made `!status` useless for deciding anything.
+    """
     bits = []
+    if ab.kind == "attack":
+        # Without this, two basic attacks both read "(free)" and nothing tells
+        # you which hits harder.
+        bits.append(f"×{ab.multiplier:g} damage")
     if ab.cost:
         bits.append(f"{ab.cost} focus")
+    elif ab.kind == "attack":
+        bits.append("free")
     if ab.ignores_armor:
         bits.append("ignores armour")
+    if ab.kind == "guard":
+        bits.append(f"{int((1 - ab.guard_reduction) * 100)}% less damage taken")
+    if ab.focus_gain:
+        bits.append(f"+{ab.focus_gain} focus")
     if ab.heal:
         bits.append(f"heals {ab.heal}")
     if ab.uses:
-        bits.append(f"{ab.uses}/contract")
-    if ab.focus_gain:
-        bits.append(f"+{ab.focus_gain} focus")
+        bits.append(f"{ab.uses} per contract")
+    return ", ".join(bits)
+
+
+def _combat_detail(ab, run) -> str:
+    """The compact version for the fight menu — cost, charges, armour only."""
+    bits = []
+    if ab.cost:
+        bits.append(f"{ab.cost} focus")
+    if ab.uses is not None:
+        bits.append(f"{run.uses.get(ab.key, 0)} left")
+    if ab.ignores_armor:
+        bits.append("ignores armour")
     if ab.kind == "guard":
-        bits.append(f"{int((1 - ab.guard_reduction) * 100)}% less damage")
-    detail = f" _({', '.join(bits)})_" if bits else ""
+        bits.append(f"−{int((1 - ab.guard_reduction) * 100)}% damage taken")
+    if ab.heal:
+        bits.append(f"heals {ab.heal}")
+    return f" _({', '.join(bits)})_" if bits else ""
+
+
+def _ability_line(ab, equipped: bool, locked: bool, index: int | None) -> str:
+    detail = f" _({_ability_detail(ab)})_"
 
     if locked:
-        return f"  🔒 {ab.name} — _unlocks at level {ab.unlock_level}_"
+        return (f"  🔒 {ab.name} — _unlocks at level {ab.unlock_level}_\n"
+                f"       _{ab.blurb}_")
     suffix = "  ← **equipped**" if equipped else ""
-    return f"  **{index}.** {ab.name}{detail}{suffix}"
+    return (f"  **{index}.** {ab.name}{detail}{suffix}\n"
+            f"       _{ab.blurb}_")
 
 
 def render_spellbook(char: Character) -> list[str]:
