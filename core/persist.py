@@ -22,6 +22,7 @@ from .content import MODIFIERS_BY_KEY, MONSTERS, QUESTS_BY_KEY, scaled_monster
 from .items import ITEMS
 import random
 
+from .guild import Guild
 from .state import Character, Contract, Encounter, Player, Run, Tombstone
 
 log = logging.getLogger("guildhall.persist")
@@ -298,4 +299,48 @@ def save_all(path: Path, players: dict[str, Player]) -> None:
         }
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(raw, indent=2, sort_keys=True))
+    tmp.replace(path)
+
+
+# --- the guild -------------------------------------------------------------
+# Stored separately from players.json: it belongs to no one, and keeping it
+# out of the per-player file means a corrupt save cannot cost the whole
+# server's shared progress.
+
+_GUILD_FIELDS: dict[str, object] = {
+    "renown": 0,
+    "contracts_completed": 0,
+    "adventures_completed": 0,
+    "members": 0,
+}
+
+
+def load_guild(path: Path) -> Guild:
+    """Never raises. A missing or broken guild file starts a new charter."""
+    if not path.exists():
+        return Guild()
+    try:
+        raw = json.loads(path.read_text())
+        if not isinstance(raw, dict):
+            raise ValueError(f"expected an object, got {type(raw).__name__}")
+    except (OSError, ValueError) as exc:
+        salvage = path.with_suffix(path.suffix + ".corrupt")
+        log.error("could not read %s (%s) — moving it to %s", path, exc, salvage)
+        try:
+            path.replace(salvage)
+        except OSError:
+            pass
+        return Guild()
+
+    values = {}
+    for key, default in _GUILD_FIELDS.items():
+        value = raw.get(key, default)
+        values[key] = value if isinstance(value, int) and value >= 0 else default
+    return Guild(**values)
+
+
+def save_guild(path: Path, guild: Guild) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps({k: getattr(guild, k) for k in _GUILD_FIELDS},
+                              indent=2, sort_keys=True))
     tmp.replace(path)

@@ -36,6 +36,7 @@ from .chargen import (
     spellbook_order,
     renown_for_next,
 )
+from .guild import Guild, contribution
 from .content import (
     STORY_CHANCE,
     plain_contract,
@@ -63,7 +64,8 @@ REROLL_COST = 5
 # Decoration only. Kept as lookups here rather than fields on the dataclasses
 # so content tables stay about mechanics and the theatre lives in the view.
 SLOT_ICONS = {"basic": "⚔️", "signature": "🔥", "defence": "🛡️", "recovery": "💚"}
-ITEM_ICONS = {"heal": "🧪", "focus": "🔮", "damage": "💥", "buff": "🪓"}
+ITEM_ICONS = {"heal": "🧪", "focus": "🔮", "damage": "💥", "buff": "🪓",
+              "scroll": "📜"}
 RACE_ICONS = {"human": "🧑", "elf": "🧝", "dwarf": "🧔", "halfling": "🍄",
               "half_orc": "👹", "gnome": "🎩"}
 MONSTER_ICONS = {"cave_rat": "🐀", "kobold": "👺", "mire_toad": "🐸",
@@ -129,7 +131,7 @@ COMMANDS: tuple[str, ...] = (
     "quest", "accept", "take", "refresh", "reroll", "shop", "store", "buy",
     "bag", "inventory", "items", "use", "spellbook", "spells", "book",
     "abilities", "equip", "swap", "graveyard", "who", "guild", "flee", "run",
-    "portal", "townportal", "tp", "escape",
+    "portal", "townportal", "tp", "escape", "give", "gift", "hand",
 )
 
 
@@ -405,7 +407,8 @@ def _validate_name(raw: str) -> tuple[str | None, str]:
     return name, ""
 
 
-def _creation_input(player: Player, text: str) -> list[str]:
+def _creation_input(player: Player, text: str,
+                    guild: Guild | None = None) -> list[str]:
     pending = player.pending
     assert pending is not None
 
@@ -436,9 +439,10 @@ def _creation_input(player: Player, text: str) -> list[str]:
         if cls is None:
             return ["_She taps the ledger._ 'Not a calling I know, poppet.'", "", *render_classes()]
         char = Character(
-            name=pending.name, race_key=pending.race_key, class_key=cls.key
+            name=pending.name, race_key=pending.race_key, class_key=cls.key,
+            gold=guild.tier.starting_gold if guild else 0,
         )
-        roll_board(char)
+        roll_board(char, size=_board_size(guild))
         player.character = char
         player.pending = None
         return [
@@ -460,7 +464,16 @@ def _creation_input(player: Player, text: str) -> list[str]:
 # runs
 # ---------------------------------------------------------------------------
 
-def roll_board(char: Character, rng: random.Random | None = None) -> None:
+def _board_size(guild: Guild | None) -> int:
+    return guild.tier.board_size if guild else BOARD_SIZE
+
+
+def _scroll_bonus(guild: Guild | None) -> float:
+    return guild.tier.scroll_bonus if guild else 1.0
+
+
+def roll_board(char: Character, rng: random.Random | None = None,
+               size: int | None = None) -> None:
     """Post a fresh set of contracts.
 
     Ordinary work is drawn by guild rank. Story contracts are gated on renown
@@ -468,8 +481,9 @@ def roll_board(char: Character, rng: random.Random | None = None) -> None:
     finds something waiting for them rather than earning it on a schedule.
     """
     rng = rng or random.Random()
+    wanted = BOARD_SIZE if size is None else size
     ordinary = quests_for_rank(char.rank)
-    picks = rng.sample(ordinary, min(BOARD_SIZE, len(ordinary)))
+    picks = rng.sample(ordinary, min(wanted, len(ordinary)))
 
     available_story = story_quests(char.renown)
     if available_story and rng.random() < STORY_CHANCE:
@@ -543,7 +557,8 @@ def start_run(char: Character, quest, seed: int | None = None) -> list[str]:
     ]
 
 
-def _advance_after_kill(char: Character) -> list[str]:
+def _advance_after_kill(char: Character,
+                        guild: Guild | None = None) -> list[str]:
     run = char.run
     assert run is not None
     run.stage += 1
@@ -569,9 +584,10 @@ def _advance_after_kill(char: Character) -> list[str]:
                 lines[1:1] = ["", final.aftermath]
             lines += ["", adventure.epilogue]
         else:
-            drops = roll_loot(run.quest.tier, run.rng)
+            bonus = _scroll_bonus(guild)
+            drops = roll_loot(run.quest.tier, run.rng, bonus)
             for _ in range(run.quest.extra_loot):
-                drops += roll_loot(run.quest.tier, run.rng)
+                drops += roll_loot(run.quest.tier, run.rng, bonus)
         for key in drops:
             char.inventory[key] = char.inventory.get(key, 0) + 1
         if drops:
@@ -595,7 +611,22 @@ def _advance_after_kill(char: Character) -> list[str]:
         if char.rank > old_rank:
             lines.append(f"🏅 **GUILD RANK {char.rank}!** The clerk pins up "
                          "nastier work with unsettling enthusiasm.")
-        roll_board(char, run.rng)
+        if guild is not None:
+            gained = contribution(run.quest.renown,
+                                  adventure=bool(run.quest.adventure_key))
+            before = guild.level
+            guild.renown += gained
+            guild.contracts_completed += 1
+            if run.quest.adventure_key:
+                guild.adventures_completed += 1
+            lines.append(f"🏰 _The guild is **{gained}** renown richer for it._")
+            if guild.level > before:
+                lines.append("")
+                lines.append(f"🎊 **THE GUILD IS NOW {guild.tier.name.upper()}!** 🎊")
+                lines.append(f"_{guild.tier.blurb}_")
+                lines.append("`!guild` to see what that changes.")
+
+        roll_board(char, run.rng, _board_size(guild))
         lines.append("")
         lines.append("_Back to the hall, boots muddy, story ready._ `!board`")
         return lines
@@ -677,8 +708,44 @@ def render_roster(roster: dict[str, Player] | None) -> list[str]:
     return lines
 
 
+def render_guild(guild: Guild | None,
+                 roster: dict[str, Player] | None) -> list[str]:
+    if guild is None:
+        return ["The guild's books are not open right now."]
+
+    tier = guild.tier
+    lines = [
+        f"🏰 **The Guild — {tier.name}** _(level {guild.level})_",
+        f"_{tier.blurb}_",
+        "",
+        f"🏅 **{guild.renown}** guild renown · 📜 {guild.contracts_completed} "
+        f"contracts · 🌀 {guild.adventures_completed} adventures",
+    ]
+    nxt = guild.next_tier
+    if nxt is None:
+        lines.append("_The guild has nothing left to prove._")
+    else:
+        lines.append(f"_{guild.renown_to_next} renown to **{nxt.name}**._")
+
+    lines += [
+        "",
+        "**What the charter buys everyone**",
+        f"  💰 New characters start with **{tier.starting_gold}** gold",
+        f"  📜 **{tier.board_size}** contracts on the board",
+        f"  🌀 Scrolls turn up **×{tier.scroll_bonus}** as often",
+        "",
+        "_Guild renown is shared, and death cannot take it._",
+    ]
+    if roster:
+        living = sum(1 for p in roster.values() if p.character is not None)
+        fallen = sum(p.deaths for p in roster.values())
+        lines.append(f"_{living} on the books · {fallen} in the ground._ `!who`")
+    return lines
+
+
 def handle(player: Player, text: str,
-           roster: dict[str, Player] | None = None) -> list[str] | None:
+           roster: dict[str, Player] | None = None,
+           guild: Guild | None = None) -> list[str] | None:
     raw = text.strip()
     # The only gate that matters: no `!`, no reaction. Applies in every state,
     # so ordinary conversation can never be mistaken for input.
@@ -690,7 +757,7 @@ def handle(player: Player, text: str,
 
     # 1. Mid-creation: the register is waiting on this player's next `!` line.
     if player.pending is not None:
-        return _creation_input(player, body)
+        return _creation_input(player, body, guild)
 
     parts = body.split()
     word = parts[0].lower()
@@ -729,7 +796,7 @@ def handle(player: Player, text: str,
             lines = combat.player_turn(char, ab)
             if not char.run.encounter.alive:
                 lines.append(f"The {char.run.encounter.monster.name} falls.")
-                return lines + _advance_after_kill(char)
+                return lines + _advance_after_kill(char, guild)
 
             lines += combat.monster_turn(char)
             if not char.run.alive:
@@ -738,10 +805,13 @@ def handle(player: Player, text: str,
             return lines + ["", *render_combat(char)]
 
         if word == "use":
-            return _use(char, parts[1:], player)
+            return _use(char, parts[1:], player, guild)
 
         if word in ("bag", "inventory", "items"):
             return render_inventory(char)
+
+        if word in ("give", "gift", "hand"):
+            return _give(player, parts[1:], roster)
 
         if word in ("equip", "swap", "learn"):
             return ["Not mid-fight — you rewrite the book back at the hall.",
@@ -765,13 +835,13 @@ def handle(player: Player, text: str,
 
     # 4. Guild hall.
     if word in ("board", "quests", "quest"):
-        if not char.board:
-            roll_board(char)
+        if not char.board or len(char.board) != _board_size(guild):
+            roll_board(char, size=_board_size(guild))
         return render_board(char)
 
     if word in ("accept", "take"):
         if not char.board:
-            roll_board(char)
+            roll_board(char, size=_board_size(guild))
             return ["You haven't read the board yet.", "", *render_board(char)]
         if len(parts) < 2 or not parts[1].isdigit():
             return ["Which one? `!accept 1`, `!accept 2`…"]
@@ -792,7 +862,7 @@ def handle(player: Player, text: str,
                 "_The clerk does not look up._ _'Impressive.'_"]
 
     if word in ("refresh", "reroll"):
-        return _refresh_board(char)
+        return _refresh_board(char, guild)
 
     if word in ("shop", "quartermaster", "store"):
         return render_shop(char)
@@ -803,6 +873,9 @@ def handle(player: Player, text: str,
     if word in ("bag", "inventory", "items"):
         return render_inventory(char)
 
+    if word in ("give", "gift", "hand"):
+        return _give(player, parts[1:], roster)
+
     if word == "use":
         return _use_in_hall(char, parts[1:])
 
@@ -812,8 +885,11 @@ def handle(player: Player, text: str,
     if word == "graveyard":
         return render_graveyard(player)
 
-    if word in ("who", "guild", "roster"):
+    if word in ("who", "roster", "members"):
         return render_roster(roster)
+
+    if word in ("guild", "hall", "charter"):
+        return render_guild(guild, roster)
 
     if word in ("create", "new"):
         return [
@@ -880,13 +956,92 @@ def _equip(char: Character, args: list[str]) -> list[str]:
     ]
 
 
-def _refresh_board(char: Character) -> list[str]:
+def _match_players(token: str, roster: dict[str, Player],
+                   exclude: str) -> list[Player]:
+    """Find a recipient by character name, MXID, or localpart.
+
+    Character name first: it is what people actually see in the room, and the
+    MXID is unreadable on a phone.
+    """
+    want = token.strip().lower().lstrip("@")
+    if not want:
+        return []
+
+    candidates = [p for p in roster.values()
+                  if p.mxid != exclude and p.character is not None]
+
+    exact = [p for p in candidates
+             if want in (p.character.name.lower(),
+                         p.character.name.lower().replace(" ", ""),
+                         p.mxid.lower().lstrip("@"),
+                         p.mxid.split(":")[0].lower().lstrip("@"))]
+    if exact:
+        return exact
+    return [p for p in candidates
+            if p.character.name.lower().startswith(want)
+            or p.mxid.lower().lstrip("@").startswith(want)]
+
+
+def _give(player: Player, args: list[str],
+          roster: dict[str, Player] | None) -> list[str]:
+    """Hand an item to another player. The whole point of scrolls being items."""
+    char = player.character
+    assert char is not None
+
+    if char.in_combat:
+        return ["Not mid-fight. _Rummaging in your bag to pass someone a "
+                "potion is how both of you end up in the graveyard._"]
+    if len(args) < 2:
+        return ["`!give <who> <item>` — e.g. `!give doc scroll`.",
+                "`!who` lists everyone on the books."]
+    if not char.inventory:
+        return ["🎒 Your bag is empty. Generous of you, though."]
+
+    people = _match_players(args[0], roster or {}, player.mxid)
+    if not people:
+        return [f"Nobody here called '{args[0]}'.",
+                "_They need a living character to receive anything._ `!who`"]
+    if len(people) > 1:
+        names = " · ".join(p.character.name for p in people)
+        return [f"Which one? {names}"]
+    recipient = people[0]
+
+    matches = match_items(args[1], sorted(char.inventory))
+    if not matches:
+        return [f"You're not carrying '{args[1]}'.", "", *render_inventory(char)]
+    if len(matches) > 1:
+        return ["Which one? " + " · ".join(m.name for m in matches)]
+    item = matches[0]
+
+    char.inventory[item.key] -= 1
+    if char.inventory[item.key] <= 0:
+        del char.inventory[item.key]
+    other = recipient.character
+    other.inventory[item.key] = other.inventory.get(item.key, 0) + 1
+
+    icon = ITEM_ICONS.get(item.kind, "🎒")
+    lines = [
+        f"🤝 **{char.name}** hands **{other.name}** {icon} **{item.name}**.",
+    ]
+    if item.kind == "scroll":
+        lines.append("_The scroll changes hands and goes quiet, the way they "
+                     "do when they have found somebody new to bother._")
+        adventure = ADVENTURES.get(item.adventure)
+        if adventure and other.level < adventure.min_level:
+            lines.append(f"_{other.name} is level {other.level}; that one "
+                         f"needs {adventure.min_level}. Something to grow into._")
+    left = char.carried
+    lines.append(f"_You have {left} item{'' if left == 1 else 's'} left._")
+    return lines
+
+
+def _refresh_board(char: Character, guild: Guild | None = None) -> list[str]:
     """Pay to have the board rewritten. Gives gold a second sink."""
     if char.gold < REROLL_COST:
         return [f"Rewriting the board costs {REROLL_COST}g and you have "
                 f"{char.gold}g."]
     char.gold -= REROLL_COST
-    roll_board(char)
+    roll_board(char, size=_board_size(guild))
     return [f"_The clerk takes your {REROLL_COST}g, tears everything down, and "
             f"pins up fresh work with a flourish._ ✂️",
             "", *render_board(char)]
@@ -966,7 +1121,8 @@ def _use_in_hall(char: Character, args: list[str]) -> list[str]:
     return start_run(char, contract_for(adventure))
 
 
-def _use(char: Character, args: list[str], player: Player) -> list[str]:
+def _use(char: Character, args: list[str], player: Player,
+         guild: Guild | None = None) -> list[str]:
     """Spend an item. Costs the turn, so the monster answers."""
     if not char.inventory:
         return ["Your bag is empty.", "", *render_combat(char)]
@@ -1002,7 +1158,7 @@ def _use(char: Character, args: list[str], player: Player) -> list[str]:
     lines = combat.use_item(char, item)
     if not char.run.encounter.alive:
         lines.append(f"The {char.run.encounter.monster.name} falls.")
-        return lines + _advance_after_kill(char)
+        return lines + _advance_after_kill(char, guild)
 
     lines += combat.monster_turn(char)
     if not char.run.alive:
@@ -1063,6 +1219,8 @@ def _help(player: Player) -> list[str]:
         "  `!equip <name>` — swap an ability into its slot",
         "  `!graveyard` — your fallen",
         "  `!who` — everyone on the guild's books",
+        "  `!guild` — the charter, and what it buys everyone",
+        "  `!give <who> <item>` — hand something over",
         "",
         "**Guild hall**",
         "  `!board` — read the quest board · also `!quests`",

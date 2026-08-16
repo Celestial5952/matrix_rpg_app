@@ -118,13 +118,16 @@ LOOT_TABLES: dict[int, tuple[int, tuple[tuple[str | None, int], ...]]] = {
 SCROLL_CHANCE: dict[int, float] = {2: 0.04, 3: 0.08}
 
 
-def roll_scroll(tier: int, rng: random.Random) -> str | None:
-    if not SCROLL_KEYS or rng.random() >= SCROLL_CHANCE.get(tier, 0.0):
+def roll_scroll(tier: int, rng: random.Random,
+                bonus: float = 1.0) -> str | None:
+    chance = SCROLL_CHANCE.get(tier, 0.0) * bonus
+    if not SCROLL_KEYS or rng.random() >= chance:
         return None
     return rng.choice(SCROLL_KEYS)
 
 
-def roll_loot(tier: int, rng: random.Random) -> list[str]:
+def roll_loot(tier: int, rng: random.Random,
+              scroll_bonus: float = 1.0) -> list[str]:
     """Item keys dropped by a completed contract of this tier."""
     rolls, table = LOOT_TABLES.get(tier, LOOT_TABLES[1])
     keys = [k for k, _ in table]
@@ -135,7 +138,7 @@ def roll_loot(tier: int, rng: random.Random) -> list[str]:
         if pick is not None:
             drops.append(pick)
 
-    scroll = roll_scroll(tier, rng)
+    scroll = roll_scroll(tier, rng, scroll_bonus)
     if scroll is not None:
         drops.append(scroll)
     return drops

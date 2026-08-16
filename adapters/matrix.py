@@ -45,7 +45,8 @@ from nio import (
 )
 
 from core.game import handle
-from core.persist import load_all, save_all
+from core.guild import Guild
+from core.persist import load_all, load_guild, save_all, save_guild
 from core.state import Player
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -94,6 +95,7 @@ class Bot:
         state_dir = Path(os.environ.get("MATRIX_STATE_DIR", "store"))
         state_dir.mkdir(parents=True, exist_ok=True)
         self.players_path = state_dir / "players.json"
+        self.guild_path = state_dir / "guild.json"
         self.sync_token_path = state_dir / "sync_token"
 
         # "post" -- every turn is its own message, nothing removed, everything
@@ -109,6 +111,9 @@ class Bot:
             self.combat_style = "post"
 
         self.players: dict[str, Player] = load_all(self.players_path)
+        # Shared and never reset by a death — kept in its own file so a
+        # corrupt player save cannot cost the whole server's progress.
+        self.guild: Guild = load_guild(self.guild_path)
         # mxid -> {"root": event_id, "frame": event_id}. A fight is one message
         # in the room that we keep editing; outcomes go in a thread off it.
         # Deliberately not persisted: after a restart the event ids may no
@@ -204,7 +209,7 @@ class Bot:
         # One malformed command must not kill the sync loop. Without this, an
         # unhandled exception in game logic takes the bot down for everyone.
         try:
-            reply = handle(player, event.body, self.players)
+            reply = handle(player, event.body, self.players, self.guild)
         except Exception:
             log.exception("handle() raised on %r from %s", event.body, event.sender)
             await self._send(["Something went wrong resolving that. "
@@ -214,8 +219,11 @@ class Bot:
         if reply is None:
             return
 
+        self.guild.members = sum(1 for p in self.players.values()
+                                 if p.character is not None)
         try:
             save_all(self.players_path, self.players)
+            save_guild(self.guild_path, self.guild)
         except OSError:
             # Losing a save is survivable; refusing to reply is not.
             log.exception("could not persist players to %s", self.players_path)

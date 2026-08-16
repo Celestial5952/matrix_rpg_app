@@ -216,6 +216,26 @@ QUESTS: tuple[Quest, ...] = (
         pool=("wolf", "cave_rat"), stages=3, gold=22, renown=4,
     ),
     Quest(
+        key="chapel_bell", name="The Chapel Bell", tier=1,
+        flavor="It rings at night. Nobody has pulled the rope in forty years.",
+        flavors=(
+            "It rings at night. Nobody has pulled the rope in forty years.",
+            "The bell rope was cut. The bell has not stopped.",
+            "Twice a night, always thirteen. The priest has stopped counting.",
+        ),
+        pool=("cave_rat", "kobold"), stages=2, gold=16, renown=3,
+    ),
+    Quest(
+        key="grain_barge", name="The Grain Barge", tier=1,
+        flavor="It came downriver with the cargo intact and the crew absent.",
+        flavors=(
+            "It came downriver with the cargo intact and the crew absent.",
+            "Something aboard has been eating the grain, and lately the rats.",
+            "The barge is tied up at the quay. Nobody will board it twice.",
+        ),
+        pool=("cave_rat", "wolf"), stages=2, gold=18, renown=3,
+    ),
+    Quest(
         key="mire_road", name="The Mire Road", tier=2,
         flavor="The causeway is out and the toads have gotten bold.",
         flavors=(

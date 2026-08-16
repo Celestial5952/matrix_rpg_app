@@ -273,6 +273,38 @@ it has a role beyond bigger numbers. Focus regenerates 1/turn and Guard grants
 HP and focus carry across encounters within a contract, with no rest between —
 attrition is the tension. Potions are limited per run.
 
+## Multiplayer
+
+Everything is routed by MXID. `handle(player, text, roster, guild)` only ever
+touches the sender's own state, and matrix-nio dispatches callbacks
+sequentially inside one event loop — each is awaited to completion before the
+next — so two players typing at once need no locking. All mutation happens
+synchronously before any network await.
+
+Per-player: character, board, run, inventory, graveyard. Two people on the same
+contract fight separate instances of the same monster.
+
+Shared: the room, `!who`, and the guild.
+
+**Guild renown** is the counterweight to permadeath. Every completed contract
+contributes a share of its renown to a server-wide pool that no death can
+touch, and the tiers it unlocks — starting gold for new characters, a wider
+board, more scrolls — belong to everyone.
+
+None of those perks make a *character* stronger, deliberately. A guild handing
+out +HP would quietly undo permadeath by making later characters better than
+earlier ones. What it buys is preparation and choice, so the guild's progress
+shows up before a fight rather than during one.
+
+`!give <who> <item>` hands anything to another player, matched by character
+name first because that is what people see in the room. It is the reason
+adventures are delivered as items: someone finds a scroll they are too low to
+read and can pass it to someone who isn't.
+
+Not built: parties, co-op, PvP, trading for gold. `Run` is 1:1 with
+`Character`, so shared-monster co-op needs a party that owns the encounter —
+a deliberate rewrite, not an extension.
+
 ## Characters and permadeath
 
 You cannot do anything until you `!create` a character: name, then race, then
