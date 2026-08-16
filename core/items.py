@@ -22,7 +22,7 @@ ITEMS: dict[str, Item] = {
         kind="heal",
         price=12,
         heal=18,
-        blurb="Cheap, bitter, reliable.",
+        blurb="Cheap, bitter, reliable. Tastes like a dare.",
     ),
     "greater_potion": Item(
         key="greater_potion",
@@ -30,7 +30,7 @@ ITEMS: dict[str, Item] = {
         kind="heal",
         price=32,
         heal=34,
-        blurb="The good stuff. Tastes of copper and lilies.",
+        blurb="The good stuff! Copper, lilies, and a faint hum of guilt.",
     ),
     "focus_draught": Item(
         key="focus_draught",
@@ -38,7 +38,7 @@ ITEMS: dict[str, Item] = {
         kind="focus",
         price=14,
         focus=5,
-        blurb="Clears the head. Briefly.",
+        blurb="Clears the head. Briefly. Gloriously.",
     ),
     "alchemists_fire": Item(
         key="alchemists_fire",
@@ -47,7 +47,7 @@ ITEMS: dict[str, Item] = {
         price=22,
         damage=24,
         ignores_armor=True,
-        blurb="A sealed flask you throw and then stop holding.",
+        blurb="A sealed flask you throw and then — crucially — stop holding.",
     ),
     "whetstone": Item(
         key="whetstone",
@@ -55,7 +55,7 @@ ITEMS: dict[str, Item] = {
         kind="buff",
         price=16,
         attack_bonus=0.6,
-        blurb="One pass down the edge. Your next hit remembers it.",
+        blurb="One long, loving pass down the edge. Your next hit remembers.",
     ),
 }
 

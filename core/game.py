@@ -57,6 +57,19 @@ from .state import (
 BOARD_SIZE = 3
 REROLL_COST = 5
 
+# Decoration only. Kept as lookups here rather than fields on the dataclasses
+# so content tables stay about mechanics and the theatre lives in the view.
+SLOT_ICONS = {"basic": "⚔️", "signature": "🔥", "defence": "🛡️", "recovery": "💚"}
+ITEM_ICONS = {"heal": "🧪", "focus": "🔮", "damage": "💥", "buff": "🪓"}
+RACE_ICONS = {"human": "🧑", "elf": "🧝", "dwarf": "🧔", "halfling": "🍄",
+              "half_orc": "👹", "gnome": "🎩"}
+MONSTER_ICONS = {"cave_rat": "🐀", "kobold": "👺", "mire_toad": "🐸",
+                 "bandit": "🗡️", "wolf": "🐺", "brigand_captain": "🎖️",
+                 "wight": "💀", "revenant": "☠️"}
+CLASS_ICONS = {"fighter": "🗡️", "wizard": "🪄", "rogue": "🗝️", "cleric": "✨",
+               "ranger": "🏹"}
+MODIFIER_ICON = "⚠️"
+
 # Every command word the bot answers to. Used for "did you mean" — a typo
 # behind a `!` is intent, and answering silence is indistinguishable from the
 # bot being down.
@@ -84,9 +97,10 @@ def _unknown(word: str, extra: list[str] | None = None) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def render_races() -> list[str]:
-    lines = ["**Choose a race.**", ""]
+    lines = ["🎭 **Choose a race.** _Purely a fashion decision._", ""]
     for i, r in enumerate(RACES, 1):
-        lines.append(f"**{i}. {r.name}** — _{r.blurb}_")
+        icon = RACE_ICONS.get(r.key, "🎭")
+        lines.append(f"**{i}. {icon} {r.name}** — _{r.blurb}_")
     lines.append("")
     lines.append("Race is who you are, not what you can do — pick the one you "
                  "like. Your class decides the numbers.")
@@ -95,11 +109,12 @@ def render_races() -> list[str]:
 
 
 def render_classes() -> list[str]:
-    lines = ["**Choose a class.**", ""]
+    lines = ["⚔️ **Choose a class.** _This one actually matters._", ""]
     for i, c in enumerate(CLASSES, 1):
         mods = _mods(c.hp_mod, c.power_mod, c.focus_mod)
         kit = " · ".join(a.name for a in c.pool if a.unlock_level <= 1)
-        lines.append(f"**{i}. {c.name}** — {mods}")
+        icon = CLASS_ICONS.get(c.key, "⚔️")
+        lines.append(f"**{i}. {icon} {c.name}** — {mods}")
         lines.append(f"   _{c.blurb}_")
         lines.append(f"   {kit}")
         later = sum(1 for a in c.pool if a.unlock_level > 1)
@@ -122,14 +137,16 @@ def render_character(char: Character) -> list[str]:
     nxt = renown_for_next(char.renown)
     progress = "max level" if nxt is None else f"{nxt} renown to level {char.level + 1}"
     return [
-        f"**{char.title}** — Level {char.level} · Guild Rank {char.rank}",
-        f"HP {char.max_hp} · power {char.power} · focus {char.max_focus}",
+        f"{RACE_ICONS.get(char.race_key, '🎭')}"
+        f"{CLASS_ICONS.get(char.class_key, '⚔️')} **{char.title}** — "
+        f"Level {char.level} · Guild Rank {char.rank}",
+        f"❤️ {char.max_hp} · 💪 {char.power} · ✨ {char.max_focus}",
         f"_{progress}_",
-        f"Renown {char.renown} · Gold {char.gold} · "
-        f"{char.runs_completed} contracts completed",
+        f"🏅 {char.renown} renown · 💰 {char.gold} gold · "
+        f"📜 {char.runs_completed} contracts completed",
         "",
         "**Abilities**",
-        *[f"  **{i}.** {a.name} — _{a.blurb}_"
+        *[f"  **{i}.** {SLOT_ICONS.get(a.slot, '✦')} {a.name} — _{a.blurb}_"
           for i, a in enumerate(char.abilities, 1)],
         *_current_contract_lines(char),
     ]
@@ -144,27 +161,28 @@ def _current_contract_lines(char: Character) -> list[str]:
     if run.quest.modifiers:
         lines.append("  " + " · ".join(m.name for m in run.quest.modifiers))
     if run.encounter is not None:
-        lines.append(f"  HP {run.hp}/{run.max_hp} · focus {run.focus}/{run.max_focus}"
-                     f" · facing a {run.encounter.monster.name}")
+        icon = MONSTER_ICONS.get(run.encounter.monster.key, "👹")
+        lines.append(f"  ❤️ {run.hp}/{run.max_hp} · ✨ {run.focus}/{run.max_focus}"
+                     f" · facing {icon} a {run.encounter.monster.name}")
     return lines
 
 
 def render_board(char: Character) -> list[str]:
     lines = [
-        f"**The Quest Board** — {char.name}, Guild Rank {char.rank} · "
+        f"📜 **The Quest Board** — {char.name}, Guild Rank {char.rank} · "
         f"{char.renown} renown · {char.gold} gold",
         "",
     ]
     for i, q in enumerate(char.board, 1):
-        tag = " ✦ **STORY**" if q.story else ""
+        tag = " ✦ **STORY** ✦" if q.story else ""
         lines.append(f"**{i}. {q.name}**{tag} "
-                     f"_(tier {q.tier}, {q.stages} encounters)_")
+                     f"_({'⭐' * q.tier}, {q.stages} encounters)_")
         lines.append(f"   {q.flavor}")
         for m in q.modifiers:
-            lines.append(f"   **{m.name}** — _{m.blurb}_")
-        lines.append(f"   Reward: {q.gold} gold, {q.renown} renown")
+            lines.append(f"   {MODIFIER_ICON} **{m.name}** — _{m.blurb}_")
+        lines.append(f"   💰 {q.gold} gold · 🏅 {q.renown} renown")
     lines.append("")
-    lines.append("`!accept <n>` to take a contract.")
+    lines.append("`!accept <n>` to take a contract · `!refresh` for new work.")
     return lines
 
 
@@ -173,12 +191,13 @@ def render_combat(char: Character) -> list[str]:
     assert run is not None and run.encounter is not None
     enc = run.encounter
     lines = [
-        f"**{enc.monster.name}**  {combat.hp_bar(enc.hp, enc.monster.max_hp)} "
+        f"{MONSTER_ICONS.get(enc.monster.key, '👹')} **{enc.monster.name}**  "
+        f"{combat.hp_bar(enc.hp, enc.monster.max_hp)} "
         f"{enc.hp}/{enc.monster.max_hp}",
         f"_{enc.next_move.telegraph}_",
         "",
-        f"**{char.name}**  {combat.hp_bar(run.hp, run.max_hp)} {run.hp}/{run.max_hp} · "
-        f"focus {run.focus}/{run.max_focus}",
+        f"❤️ **{char.name}**  {combat.hp_bar(run.hp, run.max_hp)} "
+        f"{run.hp}/{run.max_hp} · ✨ {run.focus}/{run.max_focus}",
         "",
     ]
     for i, (ab, usable, _why) in enumerate(combat.available_actions(char), 1):
@@ -188,15 +207,17 @@ def render_combat(char: Character) -> list[str]:
         elif ab.uses is not None:
             suffix = f" _({run.uses.get(ab.key, 0)} left)_"
         mark = f"**!{i}**" if usable else f"~~!{i}~~"
-        lines.append(f"  {mark} {ab.name}{suffix}")
+        icon = SLOT_ICONS.get(ab.slot, "✦")
+        lines.append(f"  {mark} {icon} {ab.name}{suffix}")
     if char.inventory:
         lines.append("")
         # Numbering matches `!use <n>`, which resolves against sorted bag order.
         for i, key in enumerate(sorted(char.inventory), 1):
             if key not in ITEMS:
                 continue
-            lines.append(f"  **!use {i}** {ITEMS[key].name} "
-                         f"×{char.inventory[key]}")
+            item = ITEMS[key]
+            lines.append(f"  **!use {i}** {ITEM_ICONS.get(item.kind, '🎒')} "
+                         f"{item.name} ×{char.inventory[key]}")
     return lines
 
 
@@ -225,7 +246,7 @@ def _ability_line(ab, equipped: bool, locked: bool, index: int | None) -> str:
 def render_spellbook(char: Character) -> list[str]:
     """Everything the class can learn, what's equipped, and what's still locked."""
     nxt = renown_for_next(char.renown)
-    heading = f"**{char.name}'s Spellbook** — Level {char.level}"
+    heading = f"📖 **{char.name}'s Spellbook** — Level {char.level}"
     if nxt is None:
         heading += " _(max)_"
     else:
@@ -236,7 +257,7 @@ def render_spellbook(char: Character) -> list[str]:
     numbering = {a.key: i for i, a in
                  enumerate(spellbook_order(char.class_key, char.level), 1)}
     for slot in SLOTS:
-        lines.append(f"**{SLOT_LABELS[slot]}**")
+        lines.append(f"{SLOT_ICONS.get(slot, '✦')} **{SLOT_LABELS[slot]}**")
         for ab in char.char_class.pool:
             if ab.slot != slot:
                 continue
@@ -250,15 +271,16 @@ def render_spellbook(char: Character) -> list[str]:
 
 
 def render_shop(char: Character) -> list[str]:
-    lines = [f"**The Quartermaster** — you have **{char.gold}** gold", ""]
+    lines = [f"🧪 **Bramblewick's Sundries** — you have **{char.gold}** gold", ""]
     for i, key in enumerate(SHOP_STOCK, 1):
         item = ITEMS[key]
         afford = "" if char.gold >= item.price else "  _(can't afford)_"
-        lines.append(f"**{i}. {item.name}** — {item.price}g{afford}")
+        icon = ITEM_ICONS.get(item.kind, "🎒")
+        lines.append(f"**{i}. {icon} {item.name}** — {item.price}g{afford}")
         lines.append(f"   _{item.blurb}_ {_effect_of(item)}")
     lines.append("")
-    lines.append("`!buy <n>` or `!buy <n> <qty>`. Everything is single-use, and "
-                 "it all dies with you.")
+    lines.append("`!buy <n>` or `!buy <n> <qty>`. _'All single use!'_ chirps "
+                 "Bramblewick. _'And it all dies with you! Isn\'t that fun?'_")
     return lines
 
 
@@ -277,14 +299,16 @@ def _effect_of(item) -> str:
 
 def render_inventory(char: Character) -> list[str]:
     if not char.inventory:
-        lines = ["Your bag is empty."]
+        lines = ["🎒 Your bag is empty. Tragic. Cavernous. Echoing."]
     else:
-        lines = [f"**{char.name}'s bag** — {char.carried} carried", ""]
+        lines = [f"🎒 **{char.name}'s bag** — {char.carried} carried", ""]
         for i, (key, count) in enumerate(sorted(char.inventory.items()), 1):
             item = ITEMS.get(key)
             if item is None:
                 continue
-            lines.append(f"  **{i}.** {item.name} ×{count} {_effect_of(item)}")
+            icon = ITEM_ICONS.get(item.kind, "🎒")
+            lines.append(f"  **{i}.** {icon} {item.name} ×{count} "
+                         f"{_effect_of(item)}")
     lines.append("")
     lines.append(f"**{char.gold}** gold. `!shop` to spend it, `!use <item>` in a fight.")
     return lines
@@ -292,8 +316,8 @@ def render_inventory(char: Character) -> list[str]:
 
 def render_graveyard(player: Player) -> list[str]:
     if not player.graveyard:
-        return ["No one of yours has died yet. Give it time."]
-    lines = [f"**The Graveyard** — {len(player.graveyard)} fallen", ""]
+        return ["🪦 No one of yours has died yet! _Give it time, sweetpea._"]
+    lines = [f"🪦 **The Graveyard** — {len(player.graveyard)} fallen, all beloved", ""]
     for t in reversed(player.graveyard[-10:]):
         lines.append(
             f"  **{t.name}** the {t.race} {t.char_class} — {t.renown} renown, "
@@ -309,12 +333,12 @@ def render_graveyard(player: Player) -> list[str]:
 def begin_creation(player: Player) -> list[str]:
     player.pending = Pending(step="name")
     return [
-        "**A new adventurer signs the guild register.**",
+        "✨ **A NEW ADVENTURER APPROACHES** ✨",
         "",
-        f"What's your name? Reply with `!` and the name — e.g. `!Doc Weed`."
-        f" _({MIN_NAME}–{MAX_NAME} characters.)_",
+        f"The clerk licks her quill, delighted. _'Name, darling?'_ — reply with "
+        f"`!` and the name, e.g. `!Doc Weed`. _({MIN_NAME}–{MAX_NAME} characters.)_",
         "",
-        "`!cancel` to back out.",
+        "`!cancel` if you've come to your senses.",
     ]
 
 
@@ -335,7 +359,7 @@ def _creation_input(player: Player, text: str) -> list[str]:
 
     if text.strip().lower() in ("cancel", "abort", "stop"):
         player.pending = None
-        return ["Register closed. `!create` when you're ready."]
+        return ["_The clerk closes the ledger with a sigh._ `!create` when you're ready."]
 
     if pending.step == "name":
         name, why = _validate_name(text)
@@ -343,20 +367,22 @@ def _creation_input(player: Player, text: str) -> list[str]:
             return [why]
         pending.name = name
         pending.step = "race"
-        return [f"Well met, **{name}**.", "", *render_races()]
+        return [f"_'**{name}**,'_ she repeats, writing it far too large. "
+                f"_'Ooh, that\'ll look lovely on a headstone.'_", "", *render_races()]
 
     if pending.step == "race":
         race = find_race(text)
         if race is None:
-            return ["I don't know that race.", "", *render_races()]
+            return ["_She squints._ 'I don\'t know that race, dear.'", "", *render_races()]
         pending.race_key = race.key
         pending.step = "class"
-        return [f"**{race.name}.** {race.blurb}", "", *render_classes()]
+        return [f"**{RACE_ICONS.get(race.key, '🎭')} {race.name}.** {race.blurb}",
+                "", *render_classes()]
 
     if pending.step == "class":
         cls = find_class(text)
         if cls is None:
-            return ["I don't know that calling.", "", *render_classes()]
+            return ["_She taps the ledger._ 'Not a calling I know, poppet.'", "", *render_classes()]
         char = Character(
             name=pending.name, race_key=pending.race_key, class_key=cls.key
         )
@@ -364,14 +390,14 @@ def _creation_input(player: Player, text: str) -> list[str]:
         player.character = char
         player.pending = None
         return [
-            "**The register is signed.**",
+            "🖋️ **THE REGISTER IS SIGNED** 🖋️",
             "",
             *render_character(char),
             "",
-            "Death is permanent here — when you fall, everything above is lost "
-            "and you start again from nothing.",
+            "_'Do try to come back,'_ she says brightly. _'They mostly don\'t.'_",
+            "Death is permanent. Everything above dies with you.",
             "",
-            "`!board` to see what work there is.",
+            "`!board` — go on, have a look. 📜"
         ]
 
     player.pending = None  # unreachable, but never strand a player
@@ -421,7 +447,7 @@ def start_run(char: Character, quest, seed: int | None = None) -> list[str]:
         f"**{quest.name}**",
         f"_{quest.flavor}_",
         "",
-        f"{char.name} sets out. Encounter 1 of {quest.stages}.",
+        f"_{char.name} sets out, cape optional._ Encounter 1 of {quest.stages}.",
         "",
         *render_combat(char),
     ]
@@ -442,8 +468,8 @@ def _advance_after_kill(char: Character) -> list[str]:
         char.run = None
         lines = [
             "",
-            f"**Contract complete — {run.quest.name}**",
-            f"+{run.quest.gold} gold, +{run.quest.renown} renown.",
+            f"🎉 **CONTRACT COMPLETE — {run.quest.name}** 🎉",
+            f"**+{run.quest.gold}** gold · **+{run.quest.renown}** renown. _Not bad, hero._",
         ]
         drops = roll_loot(run.quest.tier, run.rng)
         for _ in range(run.quest.extra_loot):
@@ -452,33 +478,35 @@ def _advance_after_kill(char: Character) -> list[str]:
             char.inventory[key] = char.inventory.get(key, 0) + 1
         if drops:
             names = " · ".join(ITEMS[k].name for k in drops)
-            lines.append(f"Salvaged from the bodies: **{names}**.")
+            lines.append(f"💰 _Rifled from the fallen:_ **{names}**.")
         else:
-            lines.append("_Nothing worth carrying home._")
+            lines.append("_Nothing worth carrying home. Not even a nice button._")
         if char.level > old_level:
             lines.append("")
-            lines.append(f"**{char.name} reaches Level {char.level}.** "
-                         f"HP {char.max_hp} · power {char.power} · "
-                         f"focus {char.max_focus}.")
+            lines.append(f"✨ **DING! {char.name.upper()} REACHES LEVEL "
+                         f"{char.level}!** ✨")
+            lines.append(f"HP **{char.max_hp}** · power **{char.power}** · "
+                         f"focus **{char.max_focus}**")
             learned = [a for a in char.char_class.pool
                        if old_level < a.unlock_level <= char.level]
             if learned:
                 names = " · ".join(a.name for a in learned)
-                lines.append(f"**Learned: {names}.** `!spellbook` to equip.")
+                lines.append(f"📖 **You have learned {names}!** "
+                             f"`!spellbook` to slot it in.")
         if char.rank > old_rank:
-            lines.append(f"**Guild Rank {char.rank}.** "
-                         "Harder contracts are on the board.")
+            lines.append(f"🏅 **GUILD RANK {char.rank}!** The clerk pins up "
+                         "nastier work with unsettling enthusiasm.")
         roll_board(char, run.rng)
         lines.append("")
-        lines.append("Back to the hall. `!board` to see what's up.")
+        lines.append("_Back to the hall, boots muddy, story ready._ `!board`")
         return lines
 
     run.encounter = combat.spawn(run.rng.choice(run.quest.pool), run.rng,
                                  run.quest)
     return [
         "",
-        f"Encounter {run.stage + 1} of {run.quest.stages}. "
-        "_(HP and focus carry over — no rest between fights.)_",
+        f"⚔️ Encounter {run.stage + 1} of {run.quest.stages}. "
+        "_No rest, no rebuff, no time to redo your hair._",
         "",
         *render_combat(char),
     ]
@@ -502,14 +530,15 @@ def _handle_death(player: Player) -> list[str]:
 
     return [
         "",
-        f"**{char.title} is dead.**",
-        f"Killed by a {killer} on {char.run.quest.name}, "
-        f"with {char.renown} renown and {char.gold} gold to their name.",
+        f"💀 **{char.title.upper()} IS DEAD** 💀",
+        f"_Felled by a {killer}_ on {char.run.quest.name} — {char.renown} renown "
+        f"and {char.gold} gold, and no pockets in a shroud.",
         "",
-        "It is all gone — the renown, the gold, the rank. That is the bargain "
-        "this guild offers.",
+        "_The hall goes quiet. Somebody's soup gets cold. Bramblewick lowers "
+        "the awning._",
+        "It is all gone. That is the bargain this guild offers, and you took it.",
         "",
-        "`!create` to sign the register again. `!graveyard` to remember.",
+        "`!create` to sign again. `!graveyard` to visit. 🕯️",
     ]
 
 
@@ -523,7 +552,7 @@ def render_roster(roster: dict[str, Player] | None) -> list[str]:
         return ["Nobody else has signed the register yet."]
 
     living = [p for p in roster.values() if p.character is not None]
-    lines = [f"**The Guild** — {len(living)} on the books", ""]
+    lines = [f"🏰 **The Guild** — {len(living)} on the books, more or less alive", ""]
     for p in sorted(living, key=lambda p: -p.character.renown):
         c = p.character
         where = "on contract" if c.run else "in the hall"
@@ -743,7 +772,8 @@ def _refresh_board(char: Character) -> list[str]:
                 f"{char.gold}g."]
     char.gold -= REROLL_COST
     roll_board(char)
-    return [f"_The clerk sighs, takes your {REROLL_COST}g, and pins up new work._",
+    return [f"_The clerk takes your {REROLL_COST}g, tears everything down, and "
+            f"pins up fresh work with a flourish._ ✂️",
             "", *render_board(char)]
 
 
@@ -827,10 +857,10 @@ def _flee(char: Character) -> list[str]:
     char.run = None
     roll_board(char, run.rng)
     return [
-        f"{char.name} breaks off and runs. The {run.quest.name} contract is "
-        "abandoned — no pay, no renown, but you live.",
+        f"🏃 _{char.name} legs it._ The {run.quest.name} contract is abandoned "
+        "— no pay, no renown, and absolutely no regrets.",
         "",
-        "`!board` to pick up something else.",
+        "_Cowardice is a valid build._ `!board` for something gentler.",
     ]
 
 

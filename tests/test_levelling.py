@@ -74,7 +74,8 @@ def test_levelling_is_announced_on_payout():
         char.run.hp = char.run.max_hp
         lines = handle(player, "!1") or lines
     assert char.level >= 2
-    assert any("Level" in line for line in lines)
+    # Case-insensitive: the announcement is deliberately shouty.
+    assert any("level" in line.lower() for line in lines)
 
 
 # --- unlocks ---------------------------------------------------------------

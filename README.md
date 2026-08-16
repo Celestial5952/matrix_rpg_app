@@ -86,6 +86,17 @@ declared intent, so an unrecognised command gets a reply with a `difflib`
 suggestion — `!bord` offers `!board`. Silence in response to a typo is
 indistinguishable from the bot being down.
 
+## Voice
+
+Camp, warm, a bit theatrical. The guild clerk is delighted you might die,
+Bramblewick runs the shop, contracts complete with confetti and levels arrive
+shouting. Emoji are decoration only — the icon lookups live in `game.py`'s view
+layer, never on the content dataclasses, so `content.py` stays about mechanics.
+
+Two places stay deliberately un-cute: numbers, and death. Stats read plainly
+because you make decisions with them, and while a death message is theatrical
+it never softens what happened. Everything really is gone.
+
 ## Design decisions already settled
 
 **Plaintext replies, not reactions.** Matrix has no real button primitive.

@@ -23,24 +23,24 @@ MONSTERS: dict[str, Monster] = {
     "cave_rat": Monster(
         key="cave_rat", name="Cave Rat", max_hp=14, power=4, armor=0,
         moves=(
-            MonsterMove("Bite", "The rat bares its teeth."),
-            MonsterMove("Scurry", "The rat skitters out of reach.", kind="guard"),
+            MonsterMove("Bite", "The rat bares its teeth. All of them. Enthusiastically."),
+            MonsterMove("Scurry", "The rat skitters off, deeply pleased with itself.", kind="guard"),
         ),
     ),
     "kobold": Monster(
         key="kobold", name="Kobold Skirmisher", max_hp=22, power=5, armor=1,
         moves=(
-            MonsterMove("Jab", "The kobold shifts its grip on the spear."),
+            MonsterMove("Jab", "The kobold shifts its grip and mutters something rude."),
             MonsterMove("Overhand Smash",
-                        "The kobold raises the spear high in both hands.",
+                        "The kobold raises the spear high in both hands. It is telegraphing. It does not care.",
                         kind="heavy", multiplier=1.8),
         ),
     ),
     "mire_toad": Monster(
         key="mire_toad", name="Mire Toad", max_hp=28, power=5, armor=2,
         moves=(
-            MonsterMove("Tongue Lash", "The toad's throat swells."),
-            MonsterMove("Hunker", "The toad squats low in the muck.", kind="guard"),
+            MonsterMove("Tongue Lash", "The toad's throat swells like a wet balloon."),
+            MonsterMove("Hunker", "The toad squats into the muck, smug as a duchess.", kind="guard"),
             MonsterMove("Body Slam", "The toad coils, legs bunching under it.",
                         kind="heavy", multiplier=1.7),
         ),
@@ -48,7 +48,7 @@ MONSTERS: dict[str, Monster] = {
     "bandit": Monster(
         key="bandit", name="Bandit Cutthroat", max_hp=26, power=6, armor=1,
         moves=(
-            MonsterMove("Slash", "The bandit circles, knife low."),
+            MonsterMove("Slash", "The bandit circles, knife low, monologue loading."),
             MonsterMove("Backstab",
                         "The bandit feints left and drops out of your light.",
                         kind="heavy", multiplier=2.0),
@@ -57,7 +57,7 @@ MONSTERS: dict[str, Monster] = {
     "wolf": Monster(
         key="wolf", name="Winter Wolf", max_hp=24, power=6, armor=0,
         moves=(
-            MonsterMove("Snap", "The wolf paces, watching your feet."),
+            MonsterMove("Snap", "The wolf paces, watching your feet, judging your boots."),
             MonsterMove("Lunge", "The wolf drops its shoulders and gathers itself.",
                         kind="heavy", multiplier=1.9),
         ),
@@ -65,7 +65,7 @@ MONSTERS: dict[str, Monster] = {
     "brigand_captain": Monster(
         key="brigand_captain", name="Brigand Captain", max_hp=38, power=7, armor=3,
         moves=(
-            MonsterMove("Sabre", "The captain salutes you, mockingly."),
+            MonsterMove("Sabre", "The captain salutes you with the tip of the blade. Show-off."),
             MonsterMove("Parry", "The captain settles into a guard.", kind="guard"),
             MonsterMove("Riposte", "The captain steps in, blade level with your eyes.",
                         kind="heavy", multiplier=2.0),
@@ -75,9 +75,9 @@ MONSTERS: dict[str, Monster] = {
         key="wight", name="Barrow Wight", max_hp=34, power=6, armor=2,
         moves=(
             MonsterMove("Chill Touch",
-                        "The wight reaches out with one grey hand.", kind="drain"),
+                        "The wight extends one grey hand, almost politely.", kind="drain"),
             MonsterMove("Grave Wail",
-                        "The wight's jaw unhinges and the air goes cold.",
+                        "The wight's jaw unhinges. The air goes cold. Somebody screams — it is you.",
                         kind="heavy", multiplier=1.9),
             MonsterMove("Shroud", "The wight draws its tatters close.", kind="guard"),
         ),
