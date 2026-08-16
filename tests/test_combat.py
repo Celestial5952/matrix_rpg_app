@@ -211,3 +211,39 @@ def test_run_snapshots_character_stats():
     assert char.run.max_hp == char.max_hp
     assert char.run.power == char.power
     assert char.run.max_focus == char.max_focus
+
+
+# --- the health bar --------------------------------------------------------
+
+def test_hp_bar_is_always_the_declared_width():
+    from core.combat import BAR_WIDTH, hp_bar
+
+    for maximum in (1, 14, 38, 200):
+        for current in range(0, maximum + 1):
+            bar = hp_bar(current, maximum)
+            # Emoji are one codepoint each here, so len() is the segment count.
+            assert len(bar) == BAR_WIDTH, f"{current}/{maximum} -> {bar!r}"
+
+
+def test_hp_bar_never_shows_a_living_thing_as_empty():
+    """1 HP out of 200 rounds to zero segments, which reads as dead."""
+    from core.combat import BAR_EMPTY, hp_bar
+
+    assert hp_bar(1, 200) != BAR_EMPTY * 8
+    assert hp_bar(0, 200) == BAR_EMPTY * 8
+
+
+def test_hp_bar_changes_colour_as_things_get_worse():
+    from core.combat import BAR_CRITICAL, BAR_HEALTHY, BAR_HURT, hp_bar
+
+    assert hp_bar(100, 100).startswith(BAR_HEALTHY)
+    assert hp_bar(50, 100).startswith(BAR_HURT)
+    assert hp_bar(10, 100).startswith(BAR_CRITICAL)
+
+
+def test_hp_bar_survives_nonsense_input():
+    from core.combat import hp_bar
+
+    assert hp_bar(0, 0)
+    assert hp_bar(-5, 30)
+    assert hp_bar(999, 30)

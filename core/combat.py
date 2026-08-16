@@ -20,9 +20,31 @@ def roll(base: float, rng: random.Random, variance: float = 0.18) -> int:
     return max(1, round(rng.uniform(lo, hi)))
 
 
-def hp_bar(current: int, maximum: int, width: int = 10) -> str:
-    filled = max(0, min(width, round(width * current / maximum))) if maximum else 0
-    return "█" * filled + "░" * (width - filled)
+# Emoji rather than block-drawing characters. A run of U+2588 renders as one
+# solid slab in Element's proportional font on iOS -- it reads as a redaction
+# bar, not a health bar -- and U+2591 is nearly invisible on a dark theme.
+# Emoji are the same width and colour in every client.
+BAR_WIDTH = 8
+BAR_EMPTY = "⬛"
+BAR_HEALTHY, BAR_HURT, BAR_CRITICAL = "🟩", "🟨", "🟥"
+
+
+def hp_bar(current: int, maximum: int, width: int = BAR_WIDTH) -> str:
+    if maximum <= 0:
+        return BAR_EMPTY * width
+    fraction = max(0.0, min(1.0, current / maximum))
+    filled = round(width * fraction)
+    if current > 0:
+        filled = max(1, filled)  # never show a living thing as empty
+    filled = min(width, filled)
+
+    if fraction > 0.6:
+        block = BAR_HEALTHY
+    elif fraction > 0.3:
+        block = BAR_HURT
+    else:
+        block = BAR_CRITICAL
+    return block * filled + BAR_EMPTY * (width - filled)
 
 
 def spawn(monster_key: str, rng: random.Random, contract=None) -> Encounter:

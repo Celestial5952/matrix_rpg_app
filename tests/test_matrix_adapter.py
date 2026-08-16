@@ -45,8 +45,12 @@ def test_underscores_inside_words_are_not_italics() -> None:
     assert _to_html("@cool_guy_name:srv") == "@cool_guy_name:srv"
 
 
-def test_hp_bar_blocks_pass_through_unharmed() -> None:
-    assert "████░░" in _to_html("**You**  ████░░ 20/34")
+def test_hp_bar_emoji_pass_through_unharmed() -> None:
+    """Escaping must not mangle the bar — it is the most-looked-at thing here."""
+    from core.combat import hp_bar
+
+    bar = hp_bar(20, 34)
+    assert bar in _to_html(f"**You**  {bar} 20/34")
 
 
 # --- fakes -----------------------------------------------------------------
