@@ -136,8 +136,11 @@ def test_chapters_are_fought_in_the_authored_order():
     for _ in range(4000):
         if char.run is None or player.character is None:
             break
-        seen.append((char.run.stage, char.run.encounter.monster.key))
         char.run.hp = char.run.max_hp  # immortal: we're testing the sequence
+        if char.run.pending_event:
+            handle(player, "!1")       # a decision, not a fight
+            continue
+        seen.append((char.run.stage, char.run.encounter.monster.key))
         handle(player, "!1")
 
     order = []

@@ -44,7 +44,7 @@ from nio import (
     WhoamiResponse,
 )
 
-from core.game import handle
+from core.game import arrive, handle, set_travel_pace
 from core.guild import Guild
 from core.duel import Duels
 from core.party import Parties
@@ -124,6 +124,11 @@ class Bot:
         # Duels are in-memory for the same reason as parties: the state is
         # shared between two players and cannot be restored per-player.
         self.duels: Duels = Duels()
+
+        # Real seconds spent travelling between encounters. 0 keeps play
+        # instant, which is what every test and the offline REPL want.
+        set_travel_pace(int(os.environ.get("MATRIX_TRAVEL_SECONDS", "0")))
+        self.travel_tick = max(5, int(os.environ.get("MATRIX_TRAVEL_TICK", "20")))
         # mxid -> {"root": event_id, "frame": event_id}. A fight is one message
         # in the room that we keep editing; outcomes go in a thread off it.
         # Deliberately not persisted: after a restart the event ids may no
@@ -139,16 +144,24 @@ class Bot:
         self.client.add_response_callback(self.on_sync_error, SyncError)
 
     def _content(self, lines: list[str], *, thread_root: str | None = None,
-                 edits: str | None = None) -> dict:
+                 edits: str | None = None, mention: str | None = None) -> dict:
         """Build an m.room.message, optionally threaded and/or an edit."""
         body = "\n".join(lines)
         html = "<br>".join(_to_html(line) for line in lines)
+        if mention:
+            # A real pill, so the arrival actually reaches their phone. An
+            # async contract nobody is notified about is just a slow one.
+            name = mention.split(":")[0].lstrip("@")
+            body = f"{name}: {body}"
+            html = (f'<a href="https://matrix.to/#/{mention}">{name}</a>: {html}')
         content: dict = {
             "msgtype": "m.notice",
             "body": body,
             "format": "org.matrix.custom.html",
             "formatted_body": html,
         }
+        if mention:
+            content["m.mentions"] = {"user_ids": [mention]}
         if edits:
             # The top-level body is the fallback older clients show; m.new_content
             # is what everything modern renders.
@@ -304,12 +317,14 @@ class Bot:
         await self._send(lines)
 
     async def _send(self, lines: list[str], *, thread_root: str | None = None,
-                    edits: str | None = None) -> str | None:
+                    edits: str | None = None,
+                    mention: str | None = None) -> str | None:
         """Send one message, retrying only when the server asks us to.
 
         Returns the event id, or None if it could not be sent.
         """
-        content = self._content(lines, thread_root=thread_root, edits=edits)
+        content = self._content(lines, thread_root=thread_root, edits=edits,
+                                mention=mention)
         for attempt in range(1, MAX_SEND_ATTEMPTS + 1):
             resp = await self.client.room_send(
                 room_id=self.room_id,
@@ -335,6 +350,34 @@ class Bot:
         log.error("giving up on a reply after %d rate-limited attempts",
                   MAX_SEND_ATTEMPTS)
         return None
+
+    async def _travel_ticker(self) -> None:
+        """Deliver arrivals. The only place the bot speaks unprompted.
+
+        One misbehaving player must not stop everyone else's contracts, and an
+        exception here would otherwise kill the task silently and leave every
+        traveller stranded on the road forever.
+        """
+        while True:
+            await asyncio.sleep(self.travel_tick)
+            try:
+                arrived = False
+                for player in list(self.players.values()):
+                    try:
+                        lines = arrive(player)
+                    except Exception:
+                        log.exception("arrival failed for %s", player.mxid)
+                        continue
+                    if not lines:
+                        continue
+                    arrived = True
+                    await self._send(lines, mention=player.mxid)
+                if arrived:
+                    save_all(self.players_path, self.players)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("travel ticker stumbled; continuing")
 
     async def on_sync(self, response: SyncResponse) -> None:
         try:
@@ -395,11 +438,13 @@ class Bot:
             self.room_id,
             "resumed" if self._resumed else "cold start",
         )
+        ticker = asyncio.create_task(self._travel_ticker())
         try:
             await self.client.sync_forever(
                 timeout=30000, since=since, full_state=not self._resumed
             )
         finally:
+            ticker.cancel()
             await self.client.close()
 
 

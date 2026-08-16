@@ -37,6 +37,7 @@ from .chargen import (
     spellbook_order,
     renown_for_next,
 )
+from .events import EVENTS_BY_KEY, resolve as resolve_choice, roll_event
 from .guild import Guild, contribution
 from .duel import BAR_DUTY_HOURS, WIN_RENOWN, Duel, Duels
 from .duel import is_legal as duel_legal
@@ -68,6 +69,13 @@ REROLL_COST = 5
 
 # Decoration only. Kept as lookups here rather than fields on the dataclasses
 # so content tables stay about mechanics and the theatre lives in the view.
+# Real time between encounters. The point of an async contract is that it
+# happens in the background of your day rather than at the speed you can type,
+# so the bot comes back to you rather than the other way round. Seconds, and
+# configurable because a sensible value for playing is a terrible one for
+# testing.
+TRAVEL_SECONDS = 0
+
 SLOT_ICONS = {"basic": "⚔️", "signature": "🔥", "defence": "🛡️", "recovery": "💚"}
 ITEM_ICONS = {"heal": "🧪", "focus": "🔮", "damage": "💥", "buff": "🪓",
               "scroll": "📜", "summon": "📯"}
@@ -221,6 +229,9 @@ def _current_contract_lines(char: Character) -> list[str]:
     run = char.run
     if run is None:
         return ["", f"_In the guild hall. Carrying {char.carried} items._"]
+    if run.travelling:
+        return ["", f"**On the road** — {run.travel_remaining} to the next "
+                    f"waypoint of {run.quest.name}."]
     lines = ["", f"**On contract: {run.quest.name}** — encounter "
                  f"{run.stage + 1} of {run.quest.stages}"]
     if run.quest.modifiers:
@@ -546,6 +557,107 @@ def roll_board(char: Character, rng: random.Random | None = None,
     char.board = [roll_contract(q, rng) for q in picks]
 
 
+def render_event(char: Character) -> list[str]:
+    run = char.run
+    event = EVENTS_BY_KEY[run.pending_event]
+    lines = [event.prompt, ""]
+    for i, choice in enumerate(event.choices, 1):
+        lines.append(f"  **!{i}** {choice.label}")
+    lines.append("")
+    lines.append(f"_{char.name} · ❤️ {run.hp}/{run.max_hp} · "
+                 f"✨ {run.focus}/{run.max_focus}_")
+    return lines
+
+
+def _apply_outcome(run, char: Character, outcome) -> list[str]:
+    """Apply one outcome's effects and describe only what actually changed."""
+    lines = [outcome.text]
+    if outcome.hp:
+        before = run.hp
+        run.hp = min(run.max_hp, run.hp + outcome.hp)
+        moved = run.hp - before
+        if moved > 0:
+            lines.append(f"_**+{moved}** HP._")
+        elif moved < 0:
+            lines.append(f"_**{moved}** HP._")
+    if outcome.focus:
+        before = run.focus
+        run.focus = max(0, min(run.max_focus, run.focus + outcome.focus))
+        if run.focus != before:
+            lines.append(f"_**{run.focus - before:+d}** focus._")
+    if outcome.gold:
+        # Never take more coin than they have — a negative purse is a bug
+        # people notice immediately.
+        change = max(outcome.gold, -char.gold)
+        char.gold += change
+        if change:
+            lines.append(f"_**{change:+d}** gold._")
+    for key in outcome.items:
+        if key in ITEMS:
+            char.inventory[key] = char.inventory.get(key, 0) + 1
+            lines.append(f"_You gain **{ITEMS[key].name}**._")
+    return lines
+
+
+def set_travel_pace(seconds: int) -> None:
+    """How long the march between encounters takes. 0 keeps play instant."""
+    global TRAVEL_SECONDS
+    TRAVEL_SECONDS = max(0, int(seconds))
+
+
+def _begin_travel(run) -> bool:
+    """Send them walking. False when the pace is instant."""
+    if TRAVEL_SECONDS <= 0:
+        return False
+    run.travel_until = time.time() + TRAVEL_SECONDS
+    run.encounter = None
+    return True
+
+
+def render_travelling(char: Character) -> list[str]:
+    run = char.run
+    return [
+        f"🥾 **{char.name} is on the road** — {run.travel_remaining} to the "
+        "next waypoint.",
+        f"_❤️ {run.hp}/{run.max_hp} · ✨ {run.focus}/{run.max_focus} · "
+        f"{run.quest.name}, {run.stage + 1} of {run.quest.stages}_",
+        "",
+        "_The guild will send word when you arrive. `!portal` if you'd rather "
+        "come home._",
+    ]
+
+
+def arrive(player: Player) -> list[str] | None:
+    """Deliver whatever was waiting at the end of the road.
+
+    Called by the adapter's ticker rather than by a player command — this is
+    the one path where the bot speaks first.
+    """
+    char = player.character
+    if char is None or char.run is None:
+        return None
+    run = char.run
+    if not run.travel_until or run.travelling:
+        return None
+
+    run.travel_until = 0.0
+    lines = [f"🥾 _{char.name} arrives._"]
+    if _offer_event(run, run.quest.tier):
+        return lines + ["", *render_event(char)]
+    return lines + _resume_after_event(char)
+
+
+def _offer_event(run, tier: int) -> bool:
+    """Maybe interrupt the march with a decision. Clears the encounter so
+    numbers select an option rather than an ability."""
+    event = roll_event(tier, run.rng)
+    if event is None:
+        return False
+    run.pending_event = event.key
+    run.encounter = None
+    return True
+
+
 def _spawn_chapter(run, index: int):
     """Spawn the monster for chapter `index`, with that chapter's modifiers.
 
@@ -682,6 +794,14 @@ def _advance_after_kill(char: Character,
         lines.append("")
         lines.append("_Back to the hall, boots muddy, story ready._ `!board`")
         return lines
+
+    # The march comes first: arriving is when the next thing happens, whether
+    # that is a decision or a monster.
+    if _begin_travel(run):
+        return ["", *render_travelling(char)]
+
+    if _offer_event(run, run.quest.tier):
+        return ["", *render_event(char)]
 
     if run.quest.is_adventure:
         previous = run.quest.chapters[run.stage - 1]
@@ -1469,6 +1589,37 @@ def handle(player: Player, text: str,
             return [f"There's no action {word}."]
         return _unknown(word, ["You're in a party fight — `!1`–`!4`, `!portal`."])
 
+    # 3a2. On the road. Nothing to fight until they arrive.
+    if char.run is not None and char.run.travelling:
+        if word in ("portal", "townportal", "tp", "escape", "flee", "run"):
+            return _portal(char)
+        if word in ("status", "me", "char", "sheet"):
+            return render_character(char)
+        if word in ("bag", "inventory", "items"):
+            return render_inventory(char)
+        if word in ("spellbook", "spells", "book", "abilities"):
+            return render_spellbook(char)
+        if word == "help":
+            return _help(player)
+        if word.isdigit() or _resolve_ability(char, word) is not None:
+            return render_travelling(char)
+        return _unknown(word, ["You're on the road — nothing to fight yet."])
+
+    # 3b. A decision is waiting. Numbers pick an option, not an ability.
+    if char.run is not None and char.run.pending_event:
+        chosen = _event_choice(player, word)
+        if chosen is not None:
+            return chosen
+        if word in ("portal", "townportal", "tp", "escape", "flee", "run"):
+            return _portal(char)
+        if word in ("status", "me", "char", "sheet"):
+            return render_character(char)
+        if word in ("bag", "inventory", "items"):
+            return render_inventory(char)
+        if word == "help":
+            return _help(player)
+        return _unknown(word, ["Something is waiting on you — pick an option."])
+
     # 3. In combat: a bare number is a command only because this player has a
     #    live encounter. Everyone else typing "1" is just chatting.
     if char.in_combat:
@@ -2062,6 +2213,47 @@ def _use(char: Character, args: list[str], player: Player,
         return lines + _handle_death(player)
 
     return lines + ["", *render_combat(char)]
+
+
+def _resume_after_event(char: Character) -> list[str]:
+    """Put the next encounter in front of them once a decision is settled."""
+    run = char.run
+    run.pending_event = ""
+    if run.quest.is_adventure:
+        chapter = run.quest.chapters[run.stage]
+        run.encounter = _spawn_chapter(run, run.stage)
+        return ["", chapter.beat, "",
+                f"_Chapter {run.stage + 1} of {run.quest.stages}._",
+                "", *render_combat(char)]
+
+    run.encounter = combat.spawn(run.rng.choice(run.quest.pool), run.rng,
+                                 run.quest)
+    return ["",
+            f"⚔️ Encounter {run.stage + 1} of {run.quest.stages}.",
+            "", *render_combat(char)]
+
+
+def _event_choice(player: Player, word: str) -> list[str] | None:
+    """Route a number to the waiting decision. None if it wasn't one."""
+    char = player.character
+    run = char.run
+    event = EVENTS_BY_KEY[run.pending_event]
+
+    if not word.isdigit():
+        return None
+    index = int(word) - 1
+    if not 0 <= index < len(event.choices):
+        return [f"There's no option {word}. There are {len(event.choices)}.",
+                "", *render_event(char)]
+
+    choice = event.choices[index]
+    outcome = resolve_choice(choice, run.rng)
+    lines = [f"**{choice.label}**", ""]
+    lines += _apply_outcome(run, char, outcome)
+
+    if run.hp <= 0:
+        return lines + _handle_death(player)
+    return lines + _resume_after_event(char)
 
 
 def _portal(char: Character) -> list[str]:

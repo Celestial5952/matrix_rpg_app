@@ -148,6 +148,48 @@ adapters/
 tests/         pytest suite; no homeserver required
 ```
 
+## Choice events
+
+Not everything on a contract is a fight. Between encounters there is a **35%**
+chance of a decision instead — hurt you, heal you, pay you, or hand you
+something. They are the cheapest content in the game per line written and the
+best place for the guild's voice.
+
+Three rules, learned writing the first set and enforced by tests:
+
+- **Every event offers a real decision.** One choice is not a decision, it is a
+  delay with prose attached.
+- **At least one choice can go either way.** An event where nothing is a gamble
+  is scenery.
+- **Walking away is always available and never free of regret** — the safe
+  option, not the correct one.
+
+A pending event pauses the fighting: `run.encounter` is cleared, so numbers
+select an option rather than an ability. An outcome can kill you.
+
+Adding one is a data edit; see the top of `events.py`. Currently solo-only —
+party runs skip them, which is a gap rather than a decision.
+
+## Async contracts
+
+`MATRIX_TRAVEL_SECONDS` sets how long the march between encounters takes. At
+**0**, the default, play is instant — which is what the offline REPL and every
+test want. Above zero the contract happens in the background of your day: you
+win a fight, you set off, and the bot **comes back to you** when you arrive,
+with a real Matrix mention so it reaches your phone.
+
+This is the one place the bot speaks first. A ticker task polls for arrivals,
+and it is deliberately defensive: one player's arrival raising must not strand
+every other traveller on the road forever, so failures are logged per-player
+and the loop continues.
+
+Travel is a timestamp on the run, so it survives a restart — you cannot skip
+the road by rebooting the bot, and a march that completed while the bot was
+down is delivered as soon as it comes back rather than being lost.
+
+While travelling you can check yourself, your bag, your spellbook, and portal
+home. There is simply nothing to fight yet.
+
 ## The board
 
 The board never posts a quest template directly. It **rolls a Contract**: the

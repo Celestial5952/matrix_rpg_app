@@ -291,6 +291,12 @@ class Run:
     pending_guard: float | None = None
     # Set by a buff item, consumed by the next attack.
     next_attack_bonus: float = 0.0
+    # Unix timestamp: the player is travelling and the next beat is not due
+    # until this passes. Zero means they are not travelling.
+    travel_until: float = 0.0
+    # Set when a choice event is waiting on the player. While this is set the
+    # run is between encounters and numbers select an option, not an ability.
+    pending_event: str = ""
     # Non-empty when this run belongs to a party. The encounter is then shared
     # with the other members and must not be resumed independently.
     party_key: str = ""
@@ -299,6 +305,20 @@ class Run:
     @property
     def alive(self) -> bool:
         return self.hp > 0
+
+    @property
+    def travelling(self) -> bool:
+        return self.travel_until > time.time()
+
+    @property
+    def travel_remaining(self) -> str:
+        seconds = max(0, int(self.travel_until - time.time()))
+        hours, minutes = divmod(seconds // 60, 60)
+        if hours:
+            return f"{hours}h {minutes:02d}m"
+        if minutes:
+            return f"{minutes}m"
+        return f"{seconds}s"
 
 
 @dataclass

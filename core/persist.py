@@ -51,6 +51,8 @@ _RUN_FIELDS: dict[str, object] = {
     "hp": 0, "max_hp": 1, "focus": 0, "max_focus": 0, "power": 1,
     "focus_regen": 1, "stage": 0, "pending_guard": None,
     "next_attack_bonus": 0.0,
+    "pending_event": "",
+    "travel_until": 0.0,
 }
 
 _TOMBSTONE_FIELDS: dict[str, object] = {
@@ -251,6 +253,9 @@ def _run_from_dict(d: object) -> Run | None:
         )
 
     kwargs = {k: d.get(k, default) for k, default in _RUN_FIELDS.items()}
+    from .events import EVENTS_BY_KEY
+    if kwargs["pending_event"] not in EVENTS_BY_KEY:
+        kwargs["pending_event"] = ""  # event deleted from events.py
     uses = d.get("uses")
     try:
         return Run(quest=contract, encounter=encounter, rng=rng,
