@@ -198,6 +198,9 @@ QUESTS: tuple[Quest, ...] = (
 )
 
 
+QUESTS_BY_KEY = {q.key: q for q in QUESTS}
+
+
 def quests_for_rank(rank: int) -> list[Quest]:
     """Ordinary contracts a character of this guild rank may be offered."""
     return [q for q in QUESTS if not q.story and q.tier <= rank]

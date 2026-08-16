@@ -65,6 +65,27 @@ tier-3 contract, the tactical layer isn't doing any work.
 Numbers move whenever `content.py` does, so read them fresh rather than
 trusting a figure written down here.
 
+## How a fight looks in the room
+
+A fight is **one message that edits itself**. Each turn rewrites it in place via
+`m.replace` rather than posting again — a 20-turn contract used to be 20
+messages scrolling the hall. The outcome (death, contract complete, flee) is
+posted as its own message in a **thread** off that frame, so the beats worth
+keeping persist while the main timeline stays at one message per contract.
+
+If an edit fails — the event is gone, or a restart lost the id — the bot posts
+a fresh frame instead. Losing an edit must never cost a player their turn.
+
+Frame ids are deliberately not persisted. After a restart the next turn simply
+opens a new frame.
+
+## Nothing prefixed is ever answered with silence
+
+Unprefixed text is ignored, always. But once someone types `!` they have
+declared intent, so an unrecognised command gets a reply with a `difflib`
+suggestion — `!bord` offers `!board`. Silence in response to a typo is
+indistinguishable from the bot being down.
+
 ## Design decisions already settled
 
 **Plaintext replies, not reactions.** Matrix has no real button primitive.
@@ -219,8 +240,8 @@ client; a 40-node skill constellation does not.
 
 - **Never run against a real homeserver yet.** The adapter is covered by tests
   against a stub client, which is not the same as proven.
-- Persistence covers the Player, Character and graveyard — an in-progress run
-  doesn't survive a restart, which lands you where `flee` would have
+- Persistence covers the Player, Character, graveyard **and any in-progress
+  run**, including RNG state — a resumed fight rolls what it would have rolled
 - **Wizard is the weakest class** (36% on tier 3 at level 1 vs Fighter's 70%).
   Intended to be the high-risk pick, but that gap wants human playtesting, not
   more simulation
@@ -234,6 +255,8 @@ client; a 40-node skill constellation does not.
   `_italic_`, `` `code` `` — enough for current game text, not a general
   renderer
 - One room per process; no multi-room or per-space routing
+- The live frame shows the last exchange, not a scrollback — earlier turns in a
+  fight are overwritten
 - No equipment, only consumables — deliberate for now, see above
 
 ## Matrix gotchas the adapter handles

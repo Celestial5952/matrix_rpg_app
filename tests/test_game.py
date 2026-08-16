@@ -72,11 +72,34 @@ def test_combat_still_ignores_ordinary_chat():
     assert handle(player, "anyone want pizza") is None
 
 
-def test_out_of_range_menu_number_is_silent():
+def test_out_of_range_menu_number_is_explained_not_silent():
+    """They typed `!`, so they meant something. Silence reads as 'bot is down'."""
     player = make_char()
     handle(player, "!board")
     handle(player, "!accept 1")
-    assert handle(player, "!9") is None
+    reply = handle(player, "!9")
+    assert reply is not None and "no action 9" in reply[0].lower()
+
+
+def test_unknown_prefixed_commands_get_a_suggestion():
+    player = make_char()
+    reply = handle(player, "!bord")
+    assert "don't know" in reply[0]
+    assert "!board" in " ".join(reply)
+
+
+def test_unknown_prefixed_commands_still_answer_without_a_suggestion():
+    player = make_char()
+    reply = handle(player, "!zzzzzzzz")
+    assert reply is not None
+    assert "!help" in " ".join(reply)
+
+
+def test_typos_never_break_the_silence_rule_for_chat():
+    """Only `!` earns a reply. Bare near-misses stay chat."""
+    player = make_char()
+    for text in ("bord", "inventroy", "board", "help"):
+        assert handle(player, text) is None
 
 
 def test_empty_input_is_ignored():
@@ -336,9 +359,10 @@ def test_flee_abandons_the_run():
     assert "abandoned" in " ".join(reply)
 
 
-def test_flee_is_silent_outside_combat():
+def test_flee_outside_combat_is_explained_not_silent():
     player = make_char()
-    assert handle(player, "!flee") is None
+    reply = handle(player, "!flee")
+    assert reply is not None
 
 
 def test_rank_gates_board_contents():

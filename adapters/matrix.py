@@ -97,6 +97,11 @@ class Bot:
         self.sync_token_path = state_dir / "sync_token"
 
         self.players: dict[str, Player] = load_all(self.players_path)
+        # mxid -> {"root": event_id, "frame": event_id}. A fight is one message
+        # in the room that we keep editing; outcomes go in a thread off it.
+        # Deliberately not persisted: after a restart the event ids may no
+        # longer be editable, so the next turn simply opens a fresh frame.
+        self.fights: dict[str, dict[str, str]] = {}
         self.start_ms = int(time.time() * 1000)
         self._resumed = False
 
@@ -105,6 +110,56 @@ class Bot:
         self.client.add_event_callback(self.on_message, RoomMessageText)
         self.client.add_response_callback(self.on_sync, SyncResponse)
         self.client.add_response_callback(self.on_sync_error, SyncError)
+
+    def _content(self, lines: list[str], *, thread_root: str | None = None,
+                 edits: str | None = None) -> dict:
+        """Build an m.room.message, optionally threaded and/or an edit."""
+        body = "\n".join(lines)
+        html = "<br>".join(_to_html(line) for line in lines)
+        content: dict = {
+            "msgtype": "m.notice",
+            "body": body,
+            "format": "org.matrix.custom.html",
+            "formatted_body": html,
+        }
+        if edits:
+            # The top-level body is the fallback older clients show; m.new_content
+            # is what everything modern renders.
+            content["body"] = f"* {body}"
+            content["formatted_body"] = f"* {html}"
+            content["m.new_content"] = {
+                "msgtype": "m.notice",
+                "body": body,
+                "format": "org.matrix.custom.html",
+                "formatted_body": html,
+            }
+            # An event carries exactly one rel_type, so an edit to a threaded
+            # message relates to the target, not the thread. Clients place it
+            # in the thread because the *target* is there.
+            content["m.relates_to"] = {"rel_type": "m.replace", "event_id": edits}
+        elif thread_root:
+            content["m.relates_to"] = {
+                "rel_type": "m.thread",
+                "event_id": thread_root,
+                "is_falling_back": True,
+                "m.in_reply_to": {"event_id": thread_root},
+            }
+        return content
+
+    async def _display_name(self, room: MatrixRoom, mxid: str) -> str:
+        """Member state is often unloaded right after a join, which is how a
+        raw MXID ends up stored as somebody's name. Ask the server instead."""
+        name = room.user_name(mxid)
+        if name and name != mxid:
+            return name
+        try:
+            resp = await self.client.get_displayname(mxid)
+            fetched = getattr(resp, "displayname", None)
+            if fetched:
+                return fetched
+        except Exception:  # noqa: BLE001 - cosmetic only, never worth failing on
+            log.debug("could not resolve a display name for %s", mxid, exc_info=True)
+        return mxid.split(":")[0].lstrip("@")
 
     def _player(self, mxid: str, display_name: str) -> Player:
         player = self.players.get(mxid)
@@ -130,13 +185,14 @@ class Bot:
         if not self._resumed and event.server_timestamp < self.start_ms:
             return
 
-        name = room.user_name(event.sender) or event.sender
+        name = await self._display_name(room, event.sender)
         player = self._player(event.sender, name)
+        was_fighting = player.in_combat
 
         # One malformed command must not kill the sync loop. Without this, an
         # unhandled exception in game logic takes the bot down for everyone.
         try:
-            reply = handle(player, event.body)
+            reply = handle(player, event.body, self.players)
         except Exception:
             log.exception("handle() raised on %r from %s", event.body, event.sender)
             await self._send(["Something went wrong resolving that. "
@@ -152,16 +208,57 @@ class Bot:
             # Losing a save is survivable; refusing to reply is not.
             log.exception("could not persist players to %s", self.players_path)
 
-        await self._send(reply)
+        await self._deliver(player, reply, was_fighting)
 
-    async def _send(self, lines: list[str]) -> None:
-        """Send one message, retrying only when the server asks us to."""
-        content = {
-            "msgtype": "m.notice",
-            "body": "\n".join(lines),
-            "format": "org.matrix.custom.html",
-            "formatted_body": "<br>".join(_to_html(line) for line in lines),
-        }
+    async def _deliver(self, player: Player, lines: list[str],
+                       was_fighting: bool) -> None:
+        """Decide whether this reply opens, updates, or closes a fight frame."""
+        mxid = player.mxid
+        fighting = player.in_combat
+        fight = self.fights.get(mxid)
+
+        if fighting and not was_fighting:
+            # A contract just started: this message becomes the live frame and
+            # the root of the thread its outcomes will hang off.
+            event_id = await self._send(lines)
+            if event_id:
+                self.fights[mxid] = {"root": event_id, "frame": event_id}
+            return
+
+        if fighting and fight:
+            # Mid-fight: rewrite the frame in place rather than adding a
+            # message per turn. A 20-turn fight was 20 messages.
+            edited = await self._send(lines, edits=fight["frame"])
+            if edited is None:
+                # The edit failed (event gone, or a restart lost the id). Fall
+                # back to a fresh frame instead of dropping the player's turn.
+                event_id = await self._send(lines)
+                if event_id:
+                    self.fights[mxid] = {"root": event_id, "frame": event_id}
+            return
+
+        if fighting:
+            event_id = await self._send(lines)
+            if event_id:
+                self.fights[mxid] = {"root": event_id, "frame": event_id}
+            return
+
+        if was_fighting and fight:
+            # The fight ended. Outcomes are the part worth keeping, so they go
+            # in the thread as their own message rather than overwriting.
+            await self._send(lines, thread_root=fight["root"])
+            self.fights.pop(mxid, None)
+            return
+
+        await self._send(lines)
+
+    async def _send(self, lines: list[str], *, thread_root: str | None = None,
+                    edits: str | None = None) -> str | None:
+        """Send one message, retrying only when the server asks us to.
+
+        Returns the event id, or None if it could not be sent.
+        """
+        content = self._content(lines, thread_root=thread_root, edits=edits)
         for attempt in range(1, MAX_SEND_ATTEMPTS + 1):
             resp = await self.client.room_send(
                 room_id=self.room_id,
@@ -169,11 +266,11 @@ class Bot:
                 content=content,
             )
             if not isinstance(resp, RoomSendError):
-                return
+                return getattr(resp, "event_id", None) or "sent"
 
             if resp.status_code != "M_LIMIT_EXCEEDED":
                 log.error("send failed (%s): %s", resp.status_code, resp.message)
-                return
+                return None
 
             wait = min((resp.retry_after_ms or 1000) / 1000, MAX_RETRY_WAIT)
             log.warning(
@@ -186,6 +283,7 @@ class Bot:
 
         log.error("giving up on a reply after %d rate-limited attempts",
                   MAX_SEND_ATTEMPTS)
+        return None
 
     async def on_sync(self, response: SyncResponse) -> None:
         try:

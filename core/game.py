@@ -18,6 +18,7 @@ normal hall/combat commands.
 
 from __future__ import annotations
 
+import difflib
 import random
 
 from . import combat
@@ -54,6 +55,28 @@ from .state import (
 )
 
 BOARD_SIZE = 3
+REROLL_COST = 5
+
+# Every command word the bot answers to. Used for "did you mean" — a typo
+# behind a `!` is intent, and answering silence is indistinguishable from the
+# bot being down.
+COMMANDS: tuple[str, ...] = (
+    "help", "create", "status", "me", "char", "sheet", "board", "quests",
+    "quest", "accept", "take", "refresh", "reroll", "shop", "store", "buy",
+    "bag", "inventory", "items", "use", "spellbook", "spells", "book",
+    "abilities", "equip", "swap", "graveyard", "who", "guild", "flee", "run",
+)
+
+
+def _unknown(word: str, extra: list[str] | None = None) -> list[str]:
+    """A prefixed command we don't recognise. Never silence — they used `!`."""
+    close = difflib.get_close_matches(word, COMMANDS, n=2, cutoff=0.6)
+    lines = [f"I don't know `!{word}`."]
+    if close:
+        lines.append("Did you mean " + " or ".join(f"`!{c}`" for c in close) + "?")
+    lines += extra or []
+    lines.append("`!help` lists everything.")
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +131,22 @@ def render_character(char: Character) -> list[str]:
         "**Abilities**",
         *[f"  **{i}.** {a.name} — _{a.blurb}_"
           for i, a in enumerate(char.abilities, 1)],
+        *_current_contract_lines(char),
     ]
+
+
+def _current_contract_lines(char: Character) -> list[str]:
+    run = char.run
+    if run is None:
+        return ["", f"_In the guild hall. Carrying {char.carried} items._"]
+    lines = ["", f"**On contract: {run.quest.name}** — encounter "
+                 f"{run.stage + 1} of {run.quest.stages}"]
+    if run.quest.modifiers:
+        lines.append("  " + " · ".join(m.name for m in run.quest.modifiers))
+    if run.encounter is not None:
+        lines.append(f"  HP {run.hp}/{run.max_hp} · focus {run.focus}/{run.max_focus}"
+                     f" · facing a {run.encounter.monster.name}")
+    return lines
 
 
 def render_board(char: Character) -> list[str]:
@@ -152,12 +190,13 @@ def render_combat(char: Character) -> list[str]:
         mark = f"**!{i}**" if usable else f"~~!{i}~~"
         lines.append(f"  {mark} {ab.name}{suffix}")
     if char.inventory:
-        carried = " · ".join(
-            f"{ITEMS[k].name} ×{c}" for k, c in sorted(char.inventory.items())
-            if k in ITEMS
-        )
         lines.append("")
-        lines.append(f"  **!use** — {carried}")
+        # Numbering matches `!use <n>`, which resolves against sorted bag order.
+        for i, key in enumerate(sorted(char.inventory), 1):
+            if key not in ITEMS:
+                continue
+            lines.append(f"  **!use {i}** {ITEMS[key].name} "
+                         f"×{char.inventory[key]}")
     return lines
 
 
@@ -478,7 +517,28 @@ def _handle_death(player: Player) -> list[str]:
 # entry point
 # ---------------------------------------------------------------------------
 
-def handle(player: Player, text: str) -> list[str] | None:
+def render_roster(roster: dict[str, Player] | None) -> list[str]:
+    """Everyone the bot has seen, living and dead."""
+    if not roster:
+        return ["Nobody else has signed the register yet."]
+
+    living = [p for p in roster.values() if p.character is not None]
+    lines = [f"**The Guild** — {len(living)} on the books", ""]
+    for p in sorted(living, key=lambda p: -p.character.renown):
+        c = p.character
+        where = "on contract" if c.run else "in the hall"
+        lines.append(f"  **{c.name}** the {c.race.name} {c.char_class.name} — "
+                     f"L{c.level}, {c.renown} renown, {where}")
+
+    fallen = sum(p.deaths for p in roster.values())
+    if fallen:
+        lines.append("")
+        lines.append(f"_{fallen} dead so far._")
+    return lines
+
+
+def handle(player: Player, text: str,
+           roster: dict[str, Player] | None = None) -> list[str] | None:
     raw = text.strip()
     # The only gate that matters: no `!`, no reaction. Applies in every state,
     # so ordinary conversation can never be mistaken for input.
@@ -503,7 +563,8 @@ def handle(player: Player, text: str) -> list[str] | None:
             return render_graveyard(player)
         if word == "help":
             return _help(player)
-        if word in ("board", "quests", "status", "accept", "me"):
+        if word in ("board", "quests", "status", "accept", "me", "shop",
+                    "bag", "inventory", "spellbook", "spells", "who"):
             return [
                 "You have no character. `!create` to make one.",
                 "",
@@ -512,7 +573,7 @@ def handle(player: Player, text: str) -> list[str] | None:
                 if player.deaths
                 else "_Death here is permanent, so choose carefully._",
             ]
-        return None
+        return _unknown(word, ["You have no character yet — `!create` first."])
 
     char = player.character
 
@@ -555,7 +616,12 @@ def handle(player: Player, text: str) -> list[str] | None:
             return render_character(char)
         if word == "help":
             return _help(player)
-        return None
+
+        if word.isdigit():
+            return [f"There's no action {word}. You have "
+                    f"{len(char.abilities)}.", "", *render_combat(char)]
+
+        return _unknown(word, ["You're mid-fight — `!1`–`!4`, `!use`, `!flee`."])
 
     # 4. Guild hall.
     if word in ("board", "quests", "quest"):
@@ -580,6 +646,9 @@ def handle(player: Player, text: str) -> list[str] | None:
     if word in ("equip", "swap", "learn"):
         return _equip(char, parts[1:])
 
+    if word in ("refresh", "reroll"):
+        return _refresh_board(char)
+
     if word in ("shop", "quartermaster", "store"):
         return render_shop(char)
 
@@ -599,6 +668,9 @@ def handle(player: Player, text: str) -> list[str] | None:
     if word == "graveyard":
         return render_graveyard(player)
 
+    if word in ("who", "guild", "roster"):
+        return render_roster(roster)
+
     if word in ("create", "new"):
         return [
             f"**{char.title}** is still alive and still working.",
@@ -608,7 +680,11 @@ def handle(player: Player, text: str) -> list[str] | None:
     if word == "help":
         return _help(player)
 
-    return None
+    if word.isdigit():
+        return ["Numbers are for fights and menus. "
+                "`!accept <n>` to take a contract."]
+
+    return _unknown(word)
 
 
 def _resolve_ability(char: Character, word: str):
@@ -658,6 +734,17 @@ def _equip(char: Character, args: list[str]) -> list[str]:
         "**Your kit** — " + " · ".join(
             f"`!{i}` {a.name}" for i, a in enumerate(char.abilities, 1)),
     ]
+
+
+def _refresh_board(char: Character) -> list[str]:
+    """Pay to have the board rewritten. Gives gold a second sink."""
+    if char.gold < REROLL_COST:
+        return [f"Rewriting the board costs {REROLL_COST}g and you have "
+                f"{char.gold}g."]
+    char.gold -= REROLL_COST
+    roll_board(char)
+    return [f"_The clerk sighs, takes your {REROLL_COST}g, and pins up new work._",
+            "", *render_board(char)]
 
 
 def _buy(char: Character, args: list[str]) -> list[str]:
@@ -775,10 +862,12 @@ def _help(player: Player) -> list[str]:
         "  `!spellbook` — abilities known and equipped · also `!spells`",
         "  `!equip <name>` — swap an ability into its slot",
         "  `!graveyard` — your fallen",
+        "  `!who` — everyone on the guild's books",
         "",
         "**Guild hall**",
         "  `!board` — read the quest board · also `!quests`",
         "  `!accept <n>` — take a contract",
+        f"  `!refresh` — new contracts on the board ({REROLL_COST}g)",
         "  `!shop` — the quartermaster's stock",
         "  `!buy <n>` — buy one · `!buy <n> <qty>` for more",
         "",

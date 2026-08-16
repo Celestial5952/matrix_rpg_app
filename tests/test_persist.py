@@ -60,18 +60,83 @@ def test_missing_file_is_empty_not_an_error(tmp_path):
     assert load_all(tmp_path / "nope.json") == {}
 
 
-def test_run_state_is_not_persisted(tmp_path):
-    """Documented tradeoff: a restart costs the contract, not the character."""
+def test_an_in_progress_run_survives_a_restart(tmp_path):
     path = tmp_path / "players.json"
     player = make_char()
     handle(player, "!board")
     handle(player, "!accept 1")
-    assert player.character.run is not None
+    handle(player, "!1")
+    char = player.character
+    assert char.run is not None and char.run.encounter is not None
 
     save_all(path, {player.mxid: player})
-    loaded = load_all(path)[player.mxid]
-    assert loaded.character is not None, "the character must survive"
-    assert loaded.character.run is None
+    loaded = load_all(path)[player.mxid].character
+
+    assert loaded.run is not None, "the fight should still be there"
+    assert loaded.run.quest.name == char.run.quest.name
+    assert loaded.run.stage == char.run.stage
+    assert (loaded.run.hp, loaded.run.focus) == (char.run.hp, char.run.focus)
+    assert loaded.run.encounter.hp == char.run.encounter.hp
+    assert loaded.run.encounter.monster.key == char.run.encounter.monster.key
+    assert loaded.run.encounter.next_move == char.run.encounter.next_move
+
+
+def test_a_resumed_run_rolls_what_it_would_have_rolled(tmp_path):
+    """Without RNG state, reloading would silently reroll the fight."""
+    path = tmp_path / "players.json"
+    player = make_char()
+    handle(player, "!board")
+    handle(player, "!accept 1")
+    save_all(path, {player.mxid: player})
+    resumed = load_all(path)[player.mxid]
+
+    original = [handle(player, "!1") for _ in range(4)]
+    replayed = [handle(resumed, "!1") for _ in range(4)]
+    assert original == replayed
+
+
+def test_contract_modifiers_survive_a_restart(tmp_path):
+    from core.content import MODIFIERS, QUESTS, plain_contract
+    from core.game import start_run
+
+    path = tmp_path / "players.json"
+    player = make_char()
+    base = plain_contract(QUESTS[0])
+    hard = base.__class__(**{**base.__dict__, "modifiers": tuple(MODIFIERS[:2])})
+    start_run(player.character, hard, seed=3)
+
+    save_all(path, {player.mxid: player})
+    loaded = load_all(path)[player.mxid].character
+    assert [m.key for m in loaded.run.quest.modifiers] == [
+        m.key for m in hard.modifiers]
+    # The scaled monster must come back scaled, not at base stats.
+    assert loaded.run.encounter.monster.armor == (
+        player.character.run.encounter.monster.armor)
+
+
+def test_a_run_referencing_a_deleted_quest_is_dropped_not_fatal(tmp_path):
+    path = tmp_path / "players.json"
+    path.write_text(json.dumps({
+        "@a:srv": {"display_name": "A", "character": {
+            "name": "X", "race_key": "elf", "class_key": "rogue",
+            "run": {"quest": {"quest": "a_quest_that_was_deleted"}},
+        }},
+    }))
+    char = load_all(path)["@a:srv"].character
+    assert char is not None, "the character must survive a bad run"
+    assert char.run is None
+
+
+def test_a_run_with_corrupt_rng_state_is_dropped_not_fatal(tmp_path):
+    path = tmp_path / "players.json"
+    path.write_text(json.dumps({
+        "@a:srv": {"display_name": "A", "character": {
+            "name": "X", "race_key": "elf", "class_key": "rogue",
+            "run": {"quest": {"quest": "cellar_rats"}, "rng": "nonsense"},
+        }},
+    }))
+    char = load_all(path)["@a:srv"].character
+    assert char is not None and char.run is None
 
 
 def test_pending_creation_is_not_persisted(tmp_path):

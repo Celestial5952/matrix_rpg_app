@@ -17,8 +17,11 @@ import logging
 from pathlib import Path
 
 from .chargen import CLASSES_BY_KEY, RACES_BY_KEY, SLOTS
+from .content import MODIFIERS_BY_KEY, MONSTERS, QUESTS_BY_KEY, scaled_monster
 from .items import ITEMS
-from .state import Character, Player, Tombstone
+import random
+
+from .state import Character, Contract, Encounter, Player, Run, Tombstone
 
 log = logging.getLogger("guildhall.persist")
 
@@ -35,6 +38,13 @@ _CHARACTER_FIELDS: dict[str, object] = {
     "created_at": 0.0,
     "inventory": None,  # None -> {}; see _inventory_from
     "loadout": None,    # None -> {}; see _loadout_from
+}
+
+# Run fields stored verbatim. The encounter, contract and RNG need rebuilding.
+_RUN_FIELDS: dict[str, object] = {
+    "hp": 0, "max_hp": 1, "focus": 0, "max_focus": 0, "power": 1,
+    "focus_regen": 1, "stage": 0, "pending_guard": None,
+    "next_attack_bonus": 0.0,
 }
 
 _TOMBSTONE_FIELDS: dict[str, object] = {
@@ -54,6 +64,7 @@ def _character_from(row: object, mxid: str) -> Character | None:
     kwargs = {k: row.get(k, d) for k, d in _CHARACTER_FIELDS.items()}
     kwargs["inventory"] = _inventory_from(kwargs["inventory"])
     kwargs["loadout"] = _loadout_from(kwargs["loadout"], kwargs["class_key"])
+    run = _run_from_dict(row.get("run"))
     # A character whose race or class was deleted from chargen.py cannot be
     # rendered or fought with. Dropping it loses that character; keeping it
     # would raise KeyError on the player's next message.
@@ -64,10 +75,12 @@ def _character_from(row: object, mxid: str) -> Character | None:
         log.warning("dropping %s: unknown class %r", mxid, kwargs["class_key"])
         return None
     try:
-        return Character(**kwargs)
+        character = Character(**kwargs)
     except TypeError as exc:
         log.warning("skipping unloadable character for %s: %s", mxid, exc)
         return None
+    character.run = run
+    return character
 
 
 def _inventory_from(raw: object) -> dict[str, int]:
@@ -123,6 +136,105 @@ def _tombstones_from(rows: object) -> list[Tombstone]:
     return out
 
 
+def _contract_to_dict(c: Contract) -> dict:
+    return {
+        "quest": c.quest.key,
+        "name": c.name, "tier": c.tier, "flavor": c.flavor,
+        "pool": list(c.pool), "stages": c.stages,
+        "gold": c.gold, "renown": c.renown, "story": c.story,
+        "modifiers": [m.key for m in c.modifiers],
+    }
+
+
+def _contract_from_dict(d: object) -> Contract | None:
+    if not isinstance(d, dict):
+        return None
+    quest = QUESTS_BY_KEY.get(d.get("quest"))
+    if quest is None:
+        return None  # template deleted from content.py
+    modifiers = tuple(MODIFIERS_BY_KEY[k] for k in d.get("modifiers", [])
+                      if k in MODIFIERS_BY_KEY)
+    pool = tuple(k for k in d.get("pool", quest.pool) if k in MONSTERS)
+    if not pool:
+        return None
+    return Contract(
+        quest=quest,
+        name=d.get("name", quest.name),
+        tier=d.get("tier", quest.tier),
+        flavor=d.get("flavor", quest.flavor),
+        pool=pool,
+        stages=max(1, int(d.get("stages", quest.stages))),
+        gold=int(d.get("gold", quest.gold)),
+        renown=int(d.get("renown", quest.renown)),
+        modifiers=modifiers,
+        story=bool(d.get("story", quest.story)),
+    )
+
+
+def _run_to_dict(run: Run) -> dict:
+    state = run.rng.getstate()
+    out = {k: getattr(run, k) for k in _RUN_FIELDS}
+    out["quest"] = _contract_to_dict(run.quest)
+    out["uses"] = dict(run.uses)
+    # getstate() is (version, tuple[int, ...], float|None); JSON flattens the
+    # inner tuple, so _run_from_dict has to put it back or the run replays
+    # different numbers than it would have.
+    out["rng"] = [state[0], list(state[1]), state[2]]
+    enc = run.encounter
+    out["encounter"] = None if enc is None else {
+        "monster": enc.monster.key,
+        "hp": enc.hp,
+        "next_move": enc.monster.moves.index(enc.next_move),
+        "guarding": enc.guarding,
+    }
+    return out
+
+
+def _run_from_dict(d: object) -> Run | None:
+    """Rebuild a live run. Returns None if anything no longer lines up —
+    losing the contract is the documented fallback, and it is far better than
+    resuming a fight against a monster whose moves have changed underneath."""
+    if not isinstance(d, dict):
+        return None
+    contract = _contract_from_dict(d.get("quest"))
+    if contract is None:
+        return None
+
+    try:
+        rng = random.Random()
+        version, state, gauss = d["rng"]
+        rng.setstate((version, tuple(state), gauss))
+    except (KeyError, ValueError, TypeError):
+        return None
+
+    encounter = None
+    raw = d.get("encounter")
+    if isinstance(raw, dict):
+        base = MONSTERS.get(raw.get("monster"))
+        if base is None:
+            return None
+        monster = scaled_monster(base, contract)
+        idx = raw.get("next_move", 0)
+        if not isinstance(idx, int) or not 0 <= idx < len(monster.moves):
+            return None
+        encounter = Encounter(
+            monster=monster,
+            hp=int(raw.get("hp", monster.max_hp)),
+            next_move=monster.moves[idx],
+            guarding=bool(raw.get("guarding", False)),
+        )
+
+    kwargs = {k: d.get(k, default) for k, default in _RUN_FIELDS.items()}
+    uses = d.get("uses")
+    try:
+        return Run(quest=contract, encounter=encounter, rng=rng,
+                   uses={k: v for k, v in uses.items()
+                         if isinstance(v, int)} if isinstance(uses, dict) else {},
+                   **kwargs)
+    except (TypeError, ValueError):
+        return None
+
+
 def load_all(path: Path) -> dict[str, Player]:
     """Load players. A bad file costs progress, not uptime."""
     if not path.exists():
@@ -163,7 +275,8 @@ def save_all(path: Path, players: dict[str, Player]) -> None:
         raw[mxid] = {
             "display_name": p.display_name,
             "character": None if char is None else {
-                k: getattr(char, k) for k in _CHARACTER_FIELDS
+                **{k: getattr(char, k) for k in _CHARACTER_FIELDS},
+                "run": None if char.run is None else _run_to_dict(char.run),
             },
             "graveyard": [
                 {k: getattr(t, k) for k in _TOMBSTONE_FIELDS} for t in p.graveyard
