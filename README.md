@@ -39,6 +39,43 @@ Player meta-state (renown, gold, rank, deaths) and the sync token persist to
 fight is not persisted — restart mid-encounter and that one run is lost, same
 as a `flee`.
 
+## Docker
+
+```bash
+cp .env.example .env      # fill in homeserver, bot user, password, room
+mkdir -p store            # must exist first, or Docker creates it root-owned
+docker compose up -d --build
+docker compose logs -f    # waits for "online … listening"
+```
+
+**The `./store:/data` mount is not optional.** Without it the container starts
+cold every single time: every character wiped, and the sync token lost. Check
+it is working by confirming `store/players.json` and `store/sync_token` appear
+on the host after the first command.
+
+The image runs as a non-root user, so `docker-compose.yml` sets `user:` to the
+uid that owns `./store` — a bind mount keeps the host's ownership, and a
+mismatch makes every save fail with `EACCES`. Override `GUILDHALL_UID` /
+`GUILDHALL_GID` in `.env` if `id -u` is not 1000.
+
+Tests are not installed in the image; run them on the host.
+
+## Diagnosis
+
+If the bot connects but never answers:
+
+```bash
+python3 -m tools.doctor
+```
+
+Read-only — it never sends a message. Checks login, alias resolution, room
+membership, encryption, whether the bot has permission to *send*, and reports
+per-event clock skew while you type in the room.
+
+Note that a bot account sitting in a room looks identical, from a client, to a
+bot that is actually running. If nothing responds, confirm a process exists
+before debugging the code.
+
 ## Tests
 
 ```bash

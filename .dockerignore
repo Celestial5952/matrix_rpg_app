@@ -1,0 +1,10 @@
+.git
+.venv
+tests
+store
+*.md
+.env
+__pycache__
+.pytest_cache
+pytest.ini
+play.py

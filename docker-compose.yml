@@ -1,0 +1,36 @@
+services:
+  guildhall:
+    build: .
+    container_name: guildhall
+    # Credentials come from .env, which is gitignored. See .env.example.
+    env_file: .env
+    environment:
+      MATRIX_STATE_DIR: /data
+
+    # The image ships a non-root user, but a *bind mount* keeps the host's
+    # ownership, so the container must run as whoever owns ./store or every
+    # save fails with EACCES. Defaults suit a single-user box; override in
+    # .env if `id -u` says otherwise.
+    user: "${GUILDHALL_UID:-1000}:${GUILDHALL_GID:-1000}"
+
+    volumes:
+      # A bind mount rather than a named volume, deliberately: you can `ls
+      # store/` and see players.json and sync_token actually exist. If this
+      # line ever goes missing, the bot silently forgets every character on
+      # restart — and loses the sync token, which is what made the old
+      # clock-skew bug fire on every start instead of once.
+      #
+      # Run `mkdir -p store` before the first `up`: Docker would otherwise
+      # create it owned by root, and the bot could not write to it.
+      - ./store:/data
+
+    restart: unless-stopped
+
+    # No listening port, so there is nothing meaningful to health-check over
+    # the network. `docker compose logs -f` is the real signal — it prints
+    # "online ... listening" once the bot is ready.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
