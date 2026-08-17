@@ -132,7 +132,7 @@ def bot(tmp_path, monkeypatch) -> Bot:
     monkeypatch.setenv("MATRIX_STATE_DIR", str(tmp_path))
     b = Bot()
     b.client = FakeClient()
-    b._resumed = True  # skip the cold-start backfill guard unless a test wants it
+    # run() registers on_message after priming; tests call on_message directly.
     return b
 
 
@@ -185,22 +185,32 @@ def test_other_rooms_are_ignored(bot: Bot) -> None:
     assert bot.client.sent == []
 
 
-def test_cold_start_drops_backfill(bot: Bot) -> None:
-    bot._resumed = False
-    deliver(bot, "!board", ts=bot.start_ms - 60_000)
-    assert bot.client.sent == [], "history older than startup must not re-execute"
+def test_message_callback_is_not_registered_until_after_priming(bot: Bot) -> None:
+    """Backfill is skipped by *when* we start listening, not by timestamp.
+
+    A freshly constructed Bot must have no message callback: run() adds it only
+    once the priming sync has consumed the existing room history.
+    """
+    fresh = Bot()
+    handlers = [cb.func for cb in fresh.client.event_callbacks]
+    assert fresh.on_message not in handlers
+    assert fresh.on_invite in handlers, (
+        "invites must still be handled from the priming sync, or a bot invited "
+        "while it was down would never join"
+    )
 
 
-def test_cold_start_still_answers_live_messages(bot: Bot) -> None:
-    bot._resumed = False
-    deliver(bot, "!board", ts=bot.start_ms + 1_000)
-    assert len(bot.client.sent) == 1
+@pytest.mark.parametrize("skew_ms", [-3_600_000, -60_000, -500, 0, 60_000])
+def test_replies_regardless_of_clock_skew(bot: Bot, skew_ms: int) -> None:
+    """A homeserver clock behind ours must not silence the bot.
 
-
-def test_resumed_start_trusts_the_sync_token(bot: Bot) -> None:
-    """With a token, anything delivered is by definition new."""
-    bot._resumed = True
-    deliver(bot, "!board", ts=bot.start_ms - 60_000)
+    Regression: the old wall-clock guard dropped every live message when the
+    server's clock ran behind the bot's by as little as half a second, on any
+    start without a persisted sync token. The bot logged "online" and was
+    completely deaf, with nothing in the log to say why.
+    """
+    enrol(bot)
+    deliver(bot, "!board", ts=int(time.time() * 1000) + skew_ms)
     assert len(bot.client.sent) == 1
 
 

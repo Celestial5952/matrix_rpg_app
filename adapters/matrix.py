@@ -142,12 +142,13 @@ class Bot:
         # Deliberately not persisted: after a restart the event ids may no
         # longer be editable, so the next turn simply opens a fresh frame.
         self.fights: dict[str, dict[str, str]] = {}
-        self.start_ms = int(time.time() * 1000)
-        self._resumed = False
 
         config = AsyncClientConfig(request_timeout=30, max_timeout_retry_wait_time=30)
         self.client = AsyncClient(self.homeserver, self.user, config=config)
-        self.client.add_event_callback(self.on_message, RoomMessageText)
+        # on_message is registered in run(), *after* the priming sync, so room
+        # history can never re-execute old commands. Invites are registered now
+        # on purpose: an invite that arrived while the bot was down sits in the
+        # priming sync, and skipping it would mean never joining that room.
         self.client.add_event_callback(self.on_invite, InviteMemberEvent)
         self.client.add_response_callback(self.on_sync, SyncResponse)
         self.client.add_response_callback(self.on_sync_error, SyncError)
@@ -307,12 +308,6 @@ class Bot:
             self.dm_rooms.add(room.room_id)
         if event.sender == self.client.user_id:
             return  # never react to our own output — avoids command-string loops
-
-        # A cold start (no persisted sync token) can hand us a page of recent
-        # history on the first sync. A resumed start only ever gets events
-        # newer than the last token, so this guard only applies cold.
-        if not self._resumed and event.server_timestamp < self.start_ms:
-            return
 
         if getattr(room, "encrypted", False):
             await self._warn_encrypted(room)
@@ -517,13 +512,31 @@ class Bot:
         since = None
         if self.sync_token_path.exists():
             since = self.sync_token_path.read_text().strip() or None
-        self._resumed = since is not None
+
+        if since is None:
+            # Cold start. Burn one sync to establish a baseline *before* the
+            # message callback is registered, so the page of history it returns
+            # cannot re-execute old commands.
+            #
+            # This replaces comparing each event's server_timestamp against our
+            # own wall clock. That comparison silently ate every live message
+            # whenever the homeserver's clock ran even slightly behind ours —
+            # half a second was enough — giving a bot that logs "online" and is
+            # completely deaf, with nothing in the log to explain it. It bit
+            # hardest wherever the state dir isn't persisted (a container with
+            # no volume), because then every start is a cold start.
+            log.info("cold start — priming sync to skip existing room history")
+            primer = await self.client.sync(timeout=30000, full_state=True)
+            if not isinstance(primer, SyncResponse):
+                raise SystemExit(f"initial sync failed: {primer}")
+            since = primer.next_batch
+
+        self.client.add_event_callback(self.on_message, RoomMessageText)
 
         log.info(
-            "guildhall bot online as %s in %s (%s)",
+            "guildhall bot online as %s in %s — listening",
             self.client.user_id,
             self.room_id,
-            "resumed" if self._resumed else "cold start",
         )
         for room_id, room in self.client.rooms.items():
             if room_id != self.room_id and self._is_dm(room):
@@ -533,9 +546,7 @@ class Bot:
 
         ticker = asyncio.create_task(self._travel_ticker())
         try:
-            await self.client.sync_forever(
-                timeout=30000, since=since, full_state=not self._resumed
-            )
+            await self.client.sync_forever(timeout=30000, since=since)
         finally:
             ticker.cancel()
             await self.client.close()
