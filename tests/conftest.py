@@ -13,7 +13,7 @@ import pytest
 
 from core import combat
 from core.content import QUESTS, plain_contract
-from core.game import handle, start_run
+from core.game import handle, set_travel_pace, start_run
 from core.state import Ability, Character, Player
 
 QUESTS_BY_KEY = {q.key: q for q in QUESTS}
@@ -70,3 +70,14 @@ def slot(char: Character, index: int) -> Ability:
 @pytest.fixture
 def rng() -> random.Random:
     return random.Random(1234)
+
+
+@pytest.fixture(autouse=True)
+def _instant_pace():
+    """Travel pace is a module global, and building a Bot sets it from the
+    environment — so without this, one adapter test puts every later test on a
+    five minute march. Reset around every test; `slow` opts back in.
+    """
+    set_travel_pace(0)
+    yield
+    set_travel_pace(0)

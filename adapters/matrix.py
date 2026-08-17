@@ -126,9 +126,12 @@ class Bot:
         # shared between two players and cannot be restored per-player.
         self.duels: Duels = Duels()
 
-        # Real seconds spent travelling between encounters. 0 keeps play
-        # instant, which is what every test and the offline REPL want.
-        set_travel_pace(int(os.environ.get("MATRIX_TRAVEL_SECONDS", "0")))
+        # Real seconds spent travelling between encounters. Live play defaults
+        # to a five minute march: a contract is meant to sit in the background
+        # of your day rather than be cleared in one sitting. core/ still
+        # defaults to 0 so tests and the offline REPL stay instant — only the
+        # adapter opts into real time. Set 0 here to play straight through.
+        set_travel_pace(int(os.environ.get("MATRIX_TRAVEL_SECONDS", "300")))
         self.travel_tick = max(5, int(os.environ.get("MATRIX_TRAVEL_TICK", "20")))
 
         # Rooms other than the hall that we answer in: one-to-one chats, for

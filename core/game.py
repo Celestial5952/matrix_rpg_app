@@ -614,6 +614,19 @@ def _begin_travel(run) -> bool:
     return True
 
 
+# What the character says when they get where they were going. The guild is not
+# a switchboard — the person you sent up the road is the one who writes to you,
+# so these are all first person and all sound like someone tired and fond.
+ARRIVAL_WORD = (
+    "Made it. Boots are ruined, spirits intact.",
+    "I'm here. Don't ask about the shortcut.",
+    "Arrived. The road was long and the company was me.",
+    "Here. Something howled twice and thought better of it.",
+    "Made it, and I only got lost the once.",
+    "Arrived — wet, cross, and entirely alive.",
+)
+
+
 def render_travelling(char: Character) -> list[str]:
     run = char.run
     return [
@@ -622,8 +635,8 @@ def render_travelling(char: Character) -> list[str]:
         f"_❤️ {run.hp}/{run.max_hp} · ✨ {run.focus}/{run.max_focus} · "
         f"{run.quest.name}, {run.stage + 1} of {run.quest.stages}_",
         "",
-        "_The guild will send word when you arrive. `!portal` if you'd rather "
-        "come home._",
+        f"_{char.name} will write when they get in. `!portal` if you'd rather "
+        "they came home._",
     ]
 
 
@@ -641,7 +654,9 @@ def arrive(player: Player) -> list[str] | None:
         return None
 
     run.travel_until = 0.0
-    lines = [f"🥾 _{char.name} arrives._"]
+    # Word comes from the character, not from the guild. Drawn off the run's
+    # own rng so a march replayed after a restart reports the same way.
+    lines = [f"🥾 **{char.name}:** _“{run.rng.choice(ARRIVAL_WORD)}”_"]
     if _offer_event(run, run.quest.tier):
         return lines + ["", *render_event(char)]
     return lines + _resume_after_event(char)

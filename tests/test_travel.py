@@ -126,7 +126,10 @@ def test_arrival_delivers_the_next_beat(slow):
 
     lines = arrive(player)
     assert lines is not None
-    assert "arrives" in " ".join(lines).lower()
+    # Word comes from the character, in their own voice — not from the guild.
+    text = " ".join(lines)
+    assert player.character.name in text
+    assert "guild" not in text.lower()
     assert run.pending_event or run.encounter is not None
 
 

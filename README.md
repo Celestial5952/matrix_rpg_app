@@ -209,16 +209,33 @@ party runs skip them, which is a gap rather than a decision.
 
 ## Async contracts
 
-`MATRIX_TRAVEL_SECONDS` sets how long the march between encounters takes. At
-**0**, the default, play is instant — which is what the offline REPL and every
-test want. Above zero the contract happens in the background of your day: you
-win a fight, you set off, and the bot **comes back to you** when you arrive,
-with a real Matrix mention so it reaches your phone.
+`MATRIX_TRAVEL_SECONDS` sets how long the march between encounters takes.
+Live play defaults to **300** — five minutes on the road after each fight, so
+a contract happens in the background of your day rather than being cleared in
+one sitting. `core/` still defaults to **0**, because the offline REPL and
+every test want play to happen at typing speed; only the adapter opts into
+real time. Set it to 0 to play straight through.
 
-This is the one place the bot speaks first. A ticker task polls for arrivals,
-and it is deliberately defensive: one player's arrival raising must not strand
-every other traveller on the road forever, so failures are logged per-player
-and the loop continues.
+Word of an arrival comes **from the character, not from the guild**. The
+person you sent up the road is the one who writes to you — first person, and
+a bit tired:
+
+```
+🥾 Bruni: “Made it. Boots are ruined, spirits intact.”
+```
+
+The guild is not a switchboard, so it stays out of it. Lines live in
+`ARRIVAL_WORD` in `game.py`'s view layer and are drawn off the run's own rng,
+so a march replayed after a restart reports itself the same way.
+
+This is the one place the bot speaks first, and it arrives with a real Matrix
+mention so it reaches your phone. A ticker task polls for arrivals, and it is
+deliberately defensive: one player's arrival raising must not strand every
+other traveller on the road forever, so failures are logged per-player and the
+loop continues.
+
+Travel pace is a module global, so `tests/conftest.py` resets it around every
+test — otherwise a single adapter test would put the whole suite on a march.
 
 Travel is a timestamp on the run, so it survives a restart — you cannot skip
 the road by rebooting the bot, and a march that completed while the bot was
