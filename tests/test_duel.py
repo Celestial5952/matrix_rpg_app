@@ -147,7 +147,7 @@ def test_a_duel_does_not_touch_contract_state():
 
 def test_losing_is_not_dying():
     roster, guild, parties, duels = yard()
-    duel = fighting(roster, guild, parties, duels)
+    fighting(roster, guild, parties, duels)
 
     for _ in range(200):
         live = duels.for_player("@p0:srv")

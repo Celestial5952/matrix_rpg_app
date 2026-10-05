@@ -14,13 +14,11 @@ import asyncio
 import time
 
 import pytest
-
 from nio import RoomSendError
 
 import adapters.matrix as adapter
 from adapters.matrix import Bot, _to_html
 from core.state import Character, Player
-
 
 # --- markdown -> HTML ------------------------------------------------------
 

@@ -8,7 +8,7 @@ from core.adventures import ADVENTURES, contract_for, scroll_for
 from core.chargen import LEVEL_RENOWN
 from core.content import MONSTERS
 from core.game import handle
-from core.items import ITEMS, SCROLL_KEYS, SCROLL_CHANCE, roll_loot
+from core.items import ITEMS, SCROLL_CHANCE, SCROLL_KEYS, roll_loot
 from core.persist import load_all, save_all
 
 from .conftest import make_char

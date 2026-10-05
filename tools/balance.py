@@ -15,7 +15,6 @@ than trusting a figure written down somewhere.
 from __future__ import annotations
 
 import argparse
-import random
 import statistics
 from dataclasses import dataclass
 

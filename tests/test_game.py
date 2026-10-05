@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from core.chargen import CLASSES, RACES
 from core.game import handle
-from core.state import MAX_NAME, Player
+from core.state import MAX_NAME
 
 from .conftest import make_char, make_player
 
@@ -175,12 +175,16 @@ def test_creation_walks_name_then_race_then_class():
 
 def test_creation_accepts_numbers_or_names():
     by_number = make_player("@n:srv")
-    handle(by_number, "!create"); handle(by_number, "!Ana")
-    handle(by_number, "!3"); handle(by_number, "!2")
+    handle(by_number, "!create")
+    handle(by_number, "!Ana")
+    handle(by_number, "!3")
+    handle(by_number, "!2")
 
     by_name = make_player("@w:srv")
-    handle(by_name, "!create"); handle(by_name, "!Ana")
-    handle(by_name, f"!{RACES[2].key}"); handle(by_name, f"!{CLASSES[1].key}")
+    handle(by_name, "!create")
+    handle(by_name, "!Ana")
+    handle(by_name, f"!{RACES[2].key}")
+    handle(by_name, f"!{CLASSES[1].key}")
 
     assert by_number.character.race_key == by_name.character.race_key
     assert by_number.character.class_key == by_name.character.class_key
@@ -188,7 +192,8 @@ def test_creation_accepts_numbers_or_names():
 
 def test_creation_rejects_unknown_race_and_stays_on_the_step():
     player = make_player()
-    handle(player, "!create"); handle(player, "!Ana")
+    handle(player, "!create")
+    handle(player, "!Ana")
     reply = handle(player, "!wombat")
     assert "don't know that race" in reply[0]
     assert player.pending.step == "race"
@@ -270,7 +275,8 @@ def test_death_destroys_the_character_and_everything_on_it():
 def test_death_leaves_a_tombstone_but_no_advantage():
     player = make_char(name="Doomed")
     player.character.renown = 42
-    handle(player, "!board"); handle(player, "!accept 1")
+    handle(player, "!board")
+    handle(player, "!accept 1")
     for _ in range(80):
         if player.character is None:
             break
@@ -285,8 +291,10 @@ def test_death_leaves_a_tombstone_but_no_advantage():
     assert grave.renown >= 42
 
     # The replacement starts from nothing.
-    handle(player, "!create"); handle(player, "!Next")
-    handle(player, "!human"); handle(player, "!fighter")
+    handle(player, "!create")
+    handle(player, "!Next")
+    handle(player, "!human")
+    handle(player, "!fighter")
     assert player.character.renown == 0
     assert player.character.gold == 0
     assert player.character.runs_completed == 0
@@ -411,8 +419,10 @@ def test_portals_die_with_the_character():
         player.character.run.hp = 1
         handle(player, "!1")
 
-    handle(player, "!create"); handle(player, "!Next")
-    handle(player, "!human"); handle(player, "!fighter")
+    handle(player, "!create")
+    handle(player, "!Next")
+    handle(player, "!human")
+    handle(player, "!fighter")
     assert player.character.portals_used == 0
 
 

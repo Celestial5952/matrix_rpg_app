@@ -1,0 +1,8 @@
+# Lint only — the codebase is not auto-formatted (no `ruff format`).
+# Run: ruff check .
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4"]
+# Line length is left to taste: docstrings and in-world prose run long.
+ignore = ["E501"]

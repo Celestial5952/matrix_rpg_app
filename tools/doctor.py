@@ -14,6 +14,7 @@ still be deaf.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import sys
 import time
@@ -198,13 +199,11 @@ class Doctor:
         client.add_event_callback(self.on_encrypted, UnknownEncryptedEvent)
 
         print(f"\nWatching for {WATCH_SECONDS}s — type something in the room now.")
-        try:
+        with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(
                 client.sync_forever(timeout=5000, since=sync.next_batch),
                 timeout=WATCH_SECONDS,
             )
-        except asyncio.TimeoutError:
-            pass
 
         print(f"\n{len(self.seen)} event(s) seen:")
         for line in self.seen[-20:]:

@@ -21,47 +21,44 @@ from __future__ import annotations
 import difflib
 import random
 import time
+from dataclasses import replace as _replace
 
 from . import combat
 from .adventures import ADVENTURES, contract_for
 from .chargen import (
     CLASSES,
-    MAX_LEVEL,
     RACES,
     SLOT_LABELS,
     SLOTS,
     find_ability,
     find_class,
     find_race,
-    known_abilities,
-    spellbook_order,
     renown_for_next,
+    spellbook_order,
 )
-from .events import EVENTS_BY_KEY, resolve as resolve_choice, roll_event
-from .guild import Guild, contribution
-from .duel import BAR_DUTY_HOURS, WIN_RENOWN, Duel, Duels
-from .duel import is_legal as duel_legal
-from .duel import resolve as duel_resolve
-from .party import MAX_PARTY, Parties, Party, scaled_for_party
 from .content import (
     STORY_CHANCE,
-    plain_contract,
     quests_for_rank,
     roll_contract,
     story_quests,
 )
-from dataclasses import replace as _replace
-
+from .duel import BAR_DUTY_HOURS, WIN_RENOWN, Duel, Duels
+from .duel import is_legal as duel_legal
+from .duel import resolve as duel_resolve
+from .events import EVENTS_BY_KEY, roll_event
+from .events import resolve as resolve_choice
+from .guild import Guild, contribution
 from .items import ITEMS, SHOP_STOCK, match_items, roll_loot
+from .party import MAX_PARTY, Parties, Party, scaled_for_party
 from .state import (
     MAX_NAME,
-    focus_regen_for,
     MIN_NAME,
     Character,
     Pending,
     Player,
     Run,
     Tombstone,
+    focus_regen_for,
 )
 
 BOARD_SIZE = 3
@@ -1433,9 +1430,8 @@ def _duel_commands(player: Player, parts: list[str],
     # can expand to several words ("Duckbill7317 ☭") and push it along.
     numbers = [int(part) for part in parts[1:] if part.isdigit()]
     wager = numbers[0] if numbers else 0
-    if wager:
-        if wager > char.gold:
-            return [f"You have {char.gold} gold. _Bold, though._"]
+    if wager and wager > char.gold:
+        return [f"You have {char.gold} gold. _Bold, though._"]
 
     if any(d.opponent == target.mxid for d in duels.issued_by(player.mxid)):
         return [f"You've already challenged **{target.character.name}**. "

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+from core.content import MONSTERS
 from core.game import handle
 from core.guild import Guild
 from core.party import MAX_PARTY, Parties, scaled_for_party
-from core.content import MONSTERS
-from core.state import Player
 
 from .conftest import make_char
 

@@ -7,8 +7,6 @@ costs, and the monster always telegraphs.
 
 from __future__ import annotations
 
-import random
-
 from core import combat
 from core.content import MONSTERS
 from core.game import start_run
@@ -90,7 +88,7 @@ def test_basic_attack_is_always_legal():
     for cls in ("fighter", "wizard", "rogue", "cleric", "ranger"):
         char = fighting(char_class=cls)
         char.run.focus = 0
-        char.run.uses = {k: 0 for k in char.run.uses}
+        char.run.uses = dict.fromkeys(char.run.uses, 0)
         usable, _ = combat.ability_is_legal(char, slot(char, 0))
         assert usable, f"{cls}'s basic attack was gated"
 

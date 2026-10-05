@@ -26,14 +26,13 @@ import logging
 import os
 import re
 import sys
-import time
 from html import escape
 from pathlib import Path
 
 from nio import (
-    InviteMemberEvent,
     AsyncClient,
     AsyncClientConfig,
+    InviteMemberEvent,
     JoinError,
     LoginResponse,
     MatrixRoom,
@@ -45,9 +44,9 @@ from nio import (
     WhoamiResponse,
 )
 
+from core.duel import Duels
 from core.game import arrive, handle, set_travel_pace
 from core.guild import Guild
-from core.duel import Duels
 from core.party import Parties
 from core.persist import load_all, load_guild, save_all, save_guild
 from core.state import Player

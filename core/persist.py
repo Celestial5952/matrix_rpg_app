@@ -12,17 +12,17 @@ strictly worse than starting fresh.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import random
 from pathlib import Path
 
 from .adventures import ADVENTURES, contract_for
 from .chargen import CLASSES_BY_KEY, RACES_BY_KEY, SLOTS
 from .content import MODIFIERS_BY_KEY, MONSTERS, QUESTS_BY_KEY, scaled_monster
-from .items import ITEMS
-import random
-
 from .guild import Guild
+from .items import ITEMS
 from .state import Character, Contract, Encounter, Player, Run, Tombstone
 
 log = logging.getLogger("guildhall.persist")
@@ -277,10 +277,8 @@ def load_all(path: Path) -> dict[str, Player]:
     except (OSError, ValueError) as exc:
         salvage = path.with_suffix(path.suffix + ".corrupt")
         log.error("could not read %s (%s) — moving it to %s", path, exc, salvage)
-        try:
+        with contextlib.suppress(OSError):
             path.replace(salvage)
-        except OSError:
-            pass
         return {}
 
     players: dict[str, Player] = {}
@@ -342,10 +340,8 @@ def load_guild(path: Path) -> Guild:
     except (OSError, ValueError) as exc:
         salvage = path.with_suffix(path.suffix + ".corrupt")
         log.error("could not read %s (%s) — moving it to %s", path, exc, salvage)
-        try:
+        with contextlib.suppress(OSError):
             path.replace(salvage)
-        except OSError:
-            pass
         return Guild()
 
     values = {}

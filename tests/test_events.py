@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 
-from core.events import EVENTS, EVENT_CHANCE, resolve, roll_event
+from core.events import EVENT_CHANCE, EVENTS, resolve, roll_event
 from core.game import handle
 from core.items import ITEMS
 

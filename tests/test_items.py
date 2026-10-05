@@ -254,8 +254,10 @@ def test_death_takes_the_bag_with_it():
         handle(player, "!1")
 
     assert player.character is None
-    handle(player, "!create"); handle(player, "!Next")
-    handle(player, "!human"); handle(player, "!fighter")
+    handle(player, "!create")
+    handle(player, "!Next")
+    handle(player, "!human")
+    handle(player, "!fighter")
     assert player.character.inventory == {}
     assert player.character.gold == 0
 

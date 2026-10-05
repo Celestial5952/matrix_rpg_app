@@ -22,7 +22,7 @@ import itertools
 import random
 from dataclasses import dataclass, field
 
-from .combat import MONSTER_GUARD_REDUCTION, roll
+from .combat import roll
 from .state import Ability, Character
 
 _ids = itertools.count(1)

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 
-from core.guild import GUILD_TIERS, Guild, contribution
 from core.game import handle
+from core.guild import GUILD_TIERS, Guild, contribution
 from core.persist import load_guild, save_guild
 
 from .conftest import make_char
@@ -27,7 +27,7 @@ def test_tiers_are_ordered_and_start_at_zero():
 
 def test_perks_never_go_backwards():
     """A guild getting bigger must never make anything worse."""
-    for earlier, later in zip(GUILD_TIERS, GUILD_TIERS[1:]):
+    for earlier, later in zip(GUILD_TIERS, GUILD_TIERS[1:], strict=False):
         assert later.starting_gold >= earlier.starting_gold
         assert later.board_size >= earlier.board_size
         assert later.scroll_bonus >= earlier.scroll_bonus
