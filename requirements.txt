@@ -1,4 +1,5 @@
 matrix-nio>=0.24
+discord.py>=2.4
 
 # tests
 pytest>=7

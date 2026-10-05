@@ -38,3 +38,29 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # The same game on Discord. Off by default (profiles), so the Matrix bot above
+  # is unaffected. Start only this one with:
+  #   docker compose --profile discord up -d guildhall-discord
+  # It is a separate process with its own state: Matrix and Discord characters
+  # do not mix.
+  guildhall-discord:
+    profiles: ["discord"]
+    image: ${GUILDHALL_IMAGE:-ghcr.io/celestial5952/matrix_rpg_app:latest}
+    build: .
+    container_name: guildhall-discord
+    command: ["python3", "-m", "adapters.discord"]
+    env_file: .env
+    environment:
+      DISCORD_STATE_DIR: /data
+    user: "${GUILDHALL_UID:-1000}:${GUILDHALL_GID:-1000}"
+    volumes:
+      # Own directory — never share one with the Matrix bot. `mkdir -p
+      # store-discord` first, for the same ownership reason as ./store.
+      - ./store-discord:/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

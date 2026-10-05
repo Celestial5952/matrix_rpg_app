@@ -1,10 +1,11 @@
 # Guildhall
 
-A text-based roguelite RPG bot for Matrix. Guild hall → quest board → turn-based
+A text-based roguelite RPG bot for Matrix — and Discord. Guild hall → quest board → turn-based
 text combat → die → keep your renown → go again.
 
-Inspired by [Crownicles](https://github.com/Crownicles/Crownicles), but built for
-Matrix rather than Discord.
+Inspired by [Crownicles](https://github.com/Crownicles/Crownicles), but built
+Matrix-first. The game itself never touches a chat SDK, so a Discord adapter sits
+beside the Matrix one and plays identically.
 
 ## Getting started
 
@@ -49,6 +50,61 @@ Skip the wizard if you'd rather: copy `.env.example` to `.env`, fill in
 `MATRIX_HOMESERVER`, `MATRIX_USER`, a password or `MATRIX_TOKEN`, and
 `MATRIX_ROOM_ID`, and invite the bot to the room first. `python3 -m tools.doctor`
 checks the result.
+
+## Discord
+
+The same game, same commands, same rules — as a second adapter
+(`adapters/discord.py`) over the same `core/`. It runs as its **own process with
+its own characters**; Matrix and Discord worlds don't mix (two processes can't
+safely share one save file, so they're kept apart on purpose).
+
+**Set it up** (about five minutes):
+
+1. [Developer Portal](https://discord.com/developers/applications) → *New
+   Application* → **Bot** → *Reset Token* and copy it.
+2. Same page, *Privileged Gateway Intents* → turn on **Message Content Intent**
+   and save. Skip this and the bot receives empty messages and looks deaf.
+3. In Discord: User Settings → Advanced → **Developer Mode** on. Right-click your
+   guild-hall channel → **Copy Channel ID**.
+4. Put three lines in `.env`:
+   ```
+   DISCORD_TOKEN=...
+   DISCORD_CHANNEL_ID=123456789012345678
+   DISCORD_ADMINS=your-numeric-user-id        # optional; right-click yourself → Copy User ID
+   ```
+5. Check it, and get the invite link:
+   ```bash
+   python3 -m adapters.discord --check
+   # or: docker compose --profile discord run --rm guildhall-discord python3 -m adapters.discord --check
+   ```
+   `--check` logs in, confirms the intent, finds your channel and its send
+   permission, and prints an invite URL with exactly the permissions the bot
+   needs (view channel, send messages, read history). Open it to add the bot.
+6. Run it:
+   ```bash
+   mkdir -p store-discord
+   docker compose --profile discord up -d guildhall-discord
+   # or, without Docker:  python3 -m adapters.discord
+   ```
+
+**How it differs from Matrix**
+
+- It answers in the one configured channel and in **DMs** (solo play — parties,
+  duels and giving stay in the channel, as on Matrix). `DISCORD_ALLOW_DMS=false`
+  turns DMs off. It ignores every other channel, so it won't talk over other
+  bots that also use `!`.
+- Players are identified by Discord user ID; a name change in Discord changes
+  the display name but never the character. `@mentions` work in `!give`,
+  `!duel`, `!invite` and `!admin`.
+- Replies are plain Discord markdown, split under Discord's 2000-character
+  limit. **Nothing can ping anyone**: mentions are disabled on every message
+  (so a character called `@everyone` is harmless), except the one deliberate
+  ping that tells you your contract has arrived.
+- Combat is always one message per turn; there is no edit-in-place mode.
+- Operators, backups, achievements, the leaderboard, gear and the daily bounty
+  all work the same. Settings are `DISCORD_*` equivalents of the `MATRIX_*`
+  ones — see `.env.example`. State lives in `store/discord/` (or
+  `./store-discord` under Docker), backups under it.
 
 ## Status
 
@@ -345,6 +401,7 @@ play.py        offline playtest REPL
 adapters/
   matrix.py    sync loop, event -> handle(), lines -> m.room.message — the
                only file that knows Matrix exists
+  discord.py   the same job for Discord; the only file that knows Discord does
 tests/         pytest suite; no homeserver required
 ```
 

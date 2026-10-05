@@ -1,1 +1,2 @@
 matrix-nio>=0.24
+discord.py>=2.4
