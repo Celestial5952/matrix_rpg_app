@@ -81,10 +81,14 @@ def _to_html(line: str) -> str:
     return html
 
 
+# Appended to start-up failures that a first-time setup is the likeliest cause of.
+SETUP_HINT = "\nNot sure what's wrong? `python3 -m tools.setup` (or ./setup.sh) walks through it."
+
+
 def _env(name: str, *, required: bool = True) -> str | None:
     val = os.environ.get(name)
     if required and not val:
-        raise SystemExit(f"missing required environment variable: {name}")
+        raise SystemExit(f"missing required environment variable: {name}{SETUP_HINT}")
     return val
 
 
@@ -96,7 +100,7 @@ class Bot:
         self.password = os.environ.get("MATRIX_PASSWORD")
         self.token = os.environ.get("MATRIX_TOKEN")
         if not self.password and not self.token:
-            raise SystemExit("set MATRIX_PASSWORD or MATRIX_TOKEN")
+            raise SystemExit("set MATRIX_PASSWORD or MATRIX_TOKEN" + SETUP_HINT)
 
         state_dir = Path(os.environ.get("MATRIX_STATE_DIR", "store"))
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -550,12 +554,12 @@ class Bot:
             self.client.user_id = self.user
             whoami = await self.client.whoami()
             if not isinstance(whoami, WhoamiResponse):
-                raise SystemExit(f"MATRIX_TOKEN rejected: {whoami}")
+                raise SystemExit(f"MATRIX_TOKEN rejected: {whoami}{SETUP_HINT}")
             self.client.user_id = whoami.user_id
         else:
             resp = await self.client.login(self.password)
             if not isinstance(resp, LoginResponse):
-                raise SystemExit(f"login failed: {resp}")
+                raise SystemExit(f"login failed: {resp}{SETUP_HINT}")
 
         # Accept a #alias:server as well as a !roomid:server — the alias is what
         # a human can actually read off their client.

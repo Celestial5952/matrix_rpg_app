@@ -10,6 +10,8 @@ RUN pip install --no-cache-dir -r requirements-runtime.txt
 COPY core/ core/
 COPY adapters/ adapters/
 COPY tools/ tools/
+# The setup wizard starts a new .env from this.
+COPY .env.example .env.example
 
 # State MUST live on a mounted volume, never in the image layer. A container
 # without one is a fresh cold start on every restart: every character wiped,

@@ -6,6 +6,50 @@ text combat → die → keep your renown → go again.
 Inspired by [Crownicles](https://github.com/Crownicles/Crownicles), but built for
 Matrix rather than Discord.
 
+## Getting started
+
+The quickest route is the setup wizard. It finds your homeserver, logs the bot
+in, gets it into a room it can read (or **creates the hall for you**, private
+and unencrypted, with you invited), and writes a correct `.env`:
+
+```bash
+./setup.sh                    # in Docker — nothing to install
+# or, without Docker:
+pip install -r requirements.txt && python3 -m tools.setup
+```
+
+Then `docker compose up -d --build`, and say `!create` in the hall.
+
+The wizard checks as it goes — the server really is Matrix (following
+`.well-known` delegation if you gave a bare domain), the login works, the room
+is not encrypted and not a space, and the bot may speak in it — so a mistake
+shows up at the step that caused it instead of as a bot that connects and stays
+silent. It offers to store an **access token** rather than the password, which
+keeps the password off disk. It never posts into an existing room, backs up any
+old `.env` to `.env.bak`, and writes the new one readable by you only. Rerun it
+whenever you like; settings it doesn't ask about are kept.
+
+### Making the bot an account
+
+The bot needs an account of its own — not yours. On a homeserver you run
+yourself with Synapse:
+
+```bash
+register_new_matrix_user -c /path/to/homeserver.yaml -u guildbot -p '<password>' --no-admin http://localhost:8008
+```
+
+On a public server such as matrix.org, register a second account the ordinary
+way (a private browser window in Element works) and use that. If the server
+rate-limits the bot (it will notice: replies arrive late), raise the bot user's
+rate limit on the homeserver.
+
+### Doing it by hand
+
+Skip the wizard if you'd rather: copy `.env.example` to `.env`, fill in
+`MATRIX_HOMESERVER`, `MATRIX_USER`, a password or `MATRIX_TOKEN`, and
+`MATRIX_ROOM_ID`, and invite the bot to the room first. `python3 -m tools.doctor`
+checks the result.
+
 ## Status
 
 Playable offline core, plus a Matrix adapter that has been run against a real
