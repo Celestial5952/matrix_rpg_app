@@ -67,7 +67,8 @@ class Ability:
 
 @dataclass(frozen=True)
 class Item:
-    """A consumable. kind is 'heal', 'focus', 'damage' or 'buff'."""
+    """Something in the bag. kind is 'heal', 'focus', 'damage' or 'buff' for
+    consumables; 'gear' for wearable equipment (see `slot`)."""
 
     key: str
     name: str
@@ -81,6 +82,11 @@ class Item:
     damage: int = 0
     ignores_armor: bool = False
     attack_bonus: float = 0.0
+    # Set on kind="gear": which slot it fills and what it adds while worn.
+    slot: str = ""
+    bonus_power: int = 0
+    bonus_hp: int = 0
+    bonus_focus: int = 0
 
 
 @dataclass(frozen=True)
@@ -353,6 +359,9 @@ class Character:
     inventory: dict[str, int] = field(default_factory=dict)
     # slot -> ability key. Empty means "use the class defaults".
     loadout: dict[str, str] = field(default_factory=dict)
+    # gear slot -> item key. Worn gear is *out* of the bag: it moves between
+    # the two, never lives in both. Dies with the character, like the bag.
+    equipment: dict[str, str] = field(default_factory=dict)
     board: list[Quest] = field(default_factory=list)
     run: Run | None = None
     created_at: float = field(default_factory=time.time)
@@ -374,22 +383,32 @@ class Character:
         from .chargen import level_for
         return level_for(self.renown)
 
+    def worn(self) -> list[Item]:
+        """Equipped gear, in slot order. Unknown keys are skipped, not raised."""
+        from .items import GEAR_SLOTS, ITEMS
+        return [ITEMS[self.equipment[slot]] for slot in GEAR_SLOTS
+                if self.equipment.get(slot) in ITEMS]
+
     @property
     def max_hp(self) -> int:
         from .chargen import hp_bonus
-        return max(1, BASE_MAX_HP + self.char_class.hp_mod + hp_bonus(self.level))
+        gear = sum(i.bonus_hp for i in self.worn())
+        return max(1, BASE_MAX_HP + self.char_class.hp_mod + hp_bonus(self.level)
+                   + gear)
 
     @property
     def power(self) -> int:
         from .chargen import power_bonus
+        gear = sum(i.bonus_power for i in self.worn())
         return max(1, BASE_POWER + self.char_class.power_mod
-                   + power_bonus(self.level))
+                   + power_bonus(self.level) + gear)
 
     @property
     def max_focus(self) -> int:
         from .chargen import focus_bonus
+        gear = sum(i.bonus_focus for i in self.worn())
         return max(0, BASE_MAX_FOCUS + self.char_class.focus_mod
-                   + focus_bonus(self.level))
+                   + focus_bonus(self.level) + gear)
 
     @property
     def abilities(self) -> tuple[Ability, ...]:
@@ -459,6 +478,12 @@ class Player:
     character: Character | None = None
     pending: Pending | None = None
     graveyard: list[Tombstone] = field(default_factory=list)
+    # Account-level and cosmetic: lifetime counters, unlocked achievements
+    # (key -> unix time) and the title shown beside the name. None of it makes
+    # a character stronger, so it can safely outlive every one of them.
+    stats: dict[str, int] = field(default_factory=dict)
+    achievements: dict[str, float] = field(default_factory=dict)
+    title_key: str = ""
 
     @property
     def deaths(self) -> int:

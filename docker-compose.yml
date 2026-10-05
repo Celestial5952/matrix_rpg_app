@@ -1,5 +1,9 @@
 services:
   guildhall:
+    # Pull a published image (`docker compose pull && docker compose up -d`), or
+    # build from this checkout (`docker compose up -d --build`). Both end up
+    # under this name. Point GUILDHALL_IMAGE at a tag to pin a version.
+    image: ${GUILDHALL_IMAGE:-ghcr.io/celestial5952/matrix_rpg_app:latest}
     build: .
     container_name: guildhall
     # Credentials come from .env, which is gitignored. See .env.example.

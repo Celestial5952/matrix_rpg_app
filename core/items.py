@@ -1,9 +1,11 @@
-"""Consumables, the shop, and loot tables.
+"""Consumables, gear, the shop, and loot tables.
 
-Everything here is single-use on purpose. Permanent equipment would compete
-with class identity for the same design space, and with permadeath it would
-mean a character's power came mostly from how long it had been lucky. Spend it
-or lose it is the whole economy.
+Consumables are single-use on purpose: spend it or lose it is the heart of the
+economy. Gear is the one permanent exception, and it is kept deliberately small
+so it cannot compete with class identity for the same design space. One piece
+per slot, modest flat bonuses, and no gear gives a class something its pool
+does not already have — +power, +HP or +focus, nothing else. Worn or carried,
+it dies with the character, so a long run of luck still costs you the lot.
 
 Like content.py, this file is meant to grow. Nothing else should need editing
 to add an item.
@@ -60,6 +62,52 @@ ITEMS: dict[str, Item] = {
     ),
 }
 
+# ---------------------------------------------------------------------------
+# gear
+# ---------------------------------------------------------------------------
+
+GEAR_SLOTS: tuple[str, ...] = ("weapon", "armour", "charm")
+GEAR_SLOT_LABELS = {"weapon": "Weapon", "armour": "Armour", "charm": "Charm"}
+
+# Rarity is a property of where it comes from, not a field: "common" is stocked
+# by Bramblewick, "fine" drops from tier 2+, "rare" only from tier 3.
+GEAR: tuple[Item, ...] = (
+    Item(key="ratcatchers_cudgel", name="Ratcatcher's Cudgel", kind="gear",
+         slot="weapon", price=60, bonus_power=1,
+         blurb="Lumpy, well-loved, and technically a table leg."),
+    Item(key="quilted_jerkin", name="Quilted Jerkin", kind="gear",
+         slot="armour", price=60, bonus_hp=4,
+         blurb="Mostly pillow. Surprisingly effective."),
+    Item(key="lucky_button", name="Lucky Button", kind="gear",
+         slot="charm", price=60, bonus_focus=1,
+         blurb="Off somebody's good coat. They do not need it back."),
+
+    Item(key="duelists_blade", name="Duelist's Blade", kind="gear",
+         slot="weapon", price=0, bonus_power=2,
+         blurb="Balanced for showing off, which is a kind of balance."),
+    Item(key="boiled_leather", name="Boiled Leather", kind="gear",
+         slot="armour", price=0, bonus_hp=8,
+         blurb="Smells like a tannery's worst day. Stops a blade."),
+    Item(key="moonstone_charm", name="Moonstone Charm", kind="gear",
+         slot="charm", price=0, bonus_focus=2,
+         blurb="Cool to the touch. Quiets the part of you that panics."),
+
+    Item(key="wightbane_edge", name="Wightbane Edge", kind="gear",
+         slot="weapon", price=0, bonus_power=3, bonus_hp=2,
+         blurb="The dead do not like it. This is the best review it could get."),
+    Item(key="revenant_plate", name="Revenant Plate", kind="gear",
+         slot="armour", price=0, bonus_hp=12,
+         blurb="Taken from something that no longer needs a chest."),
+    Item(key="star_of_the_deep", name="Star of the Deep", kind="gear",
+         slot="charm", price=0, bonus_focus=2, bonus_hp=4,
+         blurb="A light you were not supposed to bring back up."),
+)
+
+for _gear in GEAR:
+    ITEMS[_gear.key] = _gear
+
+GEAR_KEYS: tuple[str, ...] = tuple(g.key for g in GEAR)
+
 ITEMS["summoning_horn"] = Item(
     key="summoning_horn",
     name="Horn of the Absent Friend",
@@ -91,6 +139,10 @@ SHOP_STOCK: tuple[str, ...] = (
     "focus_draught",
     "alchemists_fire",
     "whetstone",
+    # Common gear only. Anything better has to be found.
+    "ratcatchers_cudgel",
+    "quilted_jerkin",
+    "lucky_button",
 )
 
 # Loot by contract tier: (rolls, [(item_key or None, weight), ...]).
@@ -126,6 +178,29 @@ LOOT_TABLES: dict[int, tuple[int, tuple[tuple[str | None, int], ...]]] = {
 SCROLL_CHANCE: dict[int, float] = {2: 0.04, 3: 0.08}
 
 
+# Gear rolls independently of the ordinary table for the same reason scrolls
+# do: the rate stays legible. tier -> (chance per contract, weighted pool).
+GEAR_DROPS: dict[int, tuple[float, tuple[tuple[str, int], ...]]] = {
+    1: (0.06, (("ratcatchers_cudgel", 1), ("quilted_jerkin", 1),
+               ("lucky_button", 1))),
+    2: (0.12, (("ratcatchers_cudgel", 2), ("quilted_jerkin", 2),
+               ("lucky_button", 2), ("duelists_blade", 1),
+               ("boiled_leather", 1), ("moonstone_charm", 1))),
+    3: (0.20, (("duelists_blade", 3), ("boiled_leather", 3),
+               ("moonstone_charm", 3), ("wightbane_edge", 1),
+               ("revenant_plate", 1), ("star_of_the_deep", 1))),
+}
+
+
+def roll_gear(tier: int, rng: random.Random) -> str | None:
+    chance, pool = GEAR_DROPS.get(tier, GEAR_DROPS[1])
+    if rng.random() >= chance:
+        return None
+    keys = [k for k, _ in pool]
+    weights = [w for _, w in pool]
+    return rng.choices(keys, weights=weights, k=1)[0]
+
+
 def roll_scroll(tier: int, rng: random.Random,
                 bonus: float = 1.0) -> str | None:
     chance = SCROLL_CHANCE.get(tier, 0.0) * bonus
@@ -149,6 +224,10 @@ def roll_loot(tier: int, rng: random.Random,
     scroll = roll_scroll(tier, rng, scroll_bonus)
     if scroll is not None:
         drops.append(scroll)
+
+    gear = roll_gear(tier, rng)
+    if gear is not None:
+        drops.append(gear)
     return drops
 
 

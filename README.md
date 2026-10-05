@@ -60,6 +60,61 @@ mismatch makes every save fail with `EACCES`. Override `GUILDHALL_UID` /
 
 Tests are not installed in the image; run them on the host.
 
+### Pre-built images
+
+Pushes to `main` publish `ghcr.io/celestial5952/matrix_rpg_app:latest` (amd64
+and arm64), and a `v1.2.3` tag also publishes `1.2.3` and `1.2`. On the server
+you can skip the build:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Set `GUILDHALL_IMAGE` in `.env` to pin a tag. `docker compose up -d --build`
+still builds from the checkout. A new package on GHCR inherits the repository's
+visibility: if the repo is private, `docker login ghcr.io` on the server first,
+or make the package public in the repo's *Packages* settings.
+
+`.github/workflows/ci.yml` runs `ruff`, the tests and a test build of the image
+on every push and pull request; `publish.yml` does the publishing.
+
+## Operators
+
+Name the people allowed to run the bot in `.env`, by full MXID:
+
+```
+MATRIX_ADMINS=@you:example.org,@them:example.org
+```
+
+Admins are decided from that list and from nothing a message says, so typing
+`!admin` proves nothing. To everyone else the command simply doesn't exist.
+
+| Command | Does |
+| --- | --- |
+| `!admin players` | everyone on the books, with MXIDs |
+| `!admin reset <who>` | delete a character — no tombstone, no undo. Refused while they're in a party or duel |
+| `!admin grant <who> gold <n>` | give gold (negative takes it, floored at 0) |
+| `!admin grant <who> item <name> [qty]` | put an item in their bag (max 99) |
+| `!admin boards` | re-post the board for everyone in the hall |
+| `!admin bounty [reroll]` | show, or redraw, today's guild bounty |
+| `!admin announce <text>` | post a notice in the hall — works from a DM too |
+| `!admin backup` | snapshot the save files now |
+
+Every operator command is written to the log.
+
+## Backups
+
+`players.json` is rewritten after almost every command, so one bad write or one
+careless `rm` costs everybody's characters. The bot snapshots `players.json` and
+`guild.json` to `store/backups/<UTC stamp>/` at start-up and every
+`MATRIX_BACKUP_HOURS` (default 24), keeping the newest `MATRIX_BACKUP_KEEP`
+(default 14). A snapshot is skipped when nothing has changed since the last.
+`MATRIX_BACKUP_HOURS=0` turns it off.
+
+To restore: stop the bot, copy the two files out of a snapshot over the ones in
+`store/`, start it again. The sync token is deliberately not backed up —
+restoring an old one makes the server replay history at the bot.
+
 ## Diagnosis
 
 If the bot connects but never answers:
@@ -79,10 +134,11 @@ before debugging the code.
 ## Tests
 
 ```bash
-pip install pytest && python3 -m pytest
+pip install -r requirements.txt && python3 -m pytest
+ruff check .          # lint; CI runs both
 ```
 
-87 tests, no homeserver required — the adapter is exercised against a stub
+Around 460 tests, no homeserver required — the adapter is exercised against a stub
 client. They cover combat invariants (fireball ignores armour, guard reduces
 damage, seeded runs replay identically), the routing rules that decide whether
 the bot speaks at all, persistence round-trips and corrupt-file recovery, and
@@ -123,6 +179,64 @@ busy shared hall the tradeoff may flip.
 In `edit` mode, a failed edit falls back to posting a fresh frame — losing an
 edit must never cost a player their turn — and frame ids are deliberately not
 persisted, so a restart simply opens a new frame.
+
+## Gear
+
+`!gear` shows what you wear and carry; `!wear <n|name>` puts a piece on and
+`!remove <slot>` takes it off — **in the hall only**. Three slots: weapon
+(+power), armour (+HP) and charm (+focus), one piece each.
+
+Consumables are single-use on purpose and gear is the one permanent exception,
+so it is kept small enough not to compete with class identity: flat bonuses of
+a few points, nothing a class's own pool doesn't already deal in. Gear **dies
+with the character**, worn or carried, so a long run of luck still costs you
+the lot.
+
+- **Common** kit (60g each) is for sale at Bramblewick. One of each — you
+  can't stack or double-buy.
+- **Fine** kit drops from tier 2+ contracts, **rare** kit only from tier 3.
+  Drops roll separately from the loot table (6% / 12% / 20% a contract by
+  tier), so the rate stays legible and potion odds don't move.
+- Worn gear folds into max HP / power / focus, so duels, parties and the
+  balance tool all see it without special cases. It can be traded with `!give`
+  while it's in the bag, not while it's worn.
+
+Adding a piece is one `Item(kind="gear", slot=...)` row in `core/items.py` and,
+if it should drop, a line in `GEAR_DROPS`.
+
+## Achievements and titles
+
+`!titles` lists them; `!title <n>` wears one beside your name; `!title none`
+takes it off. Fourteen are defined in `core/achievements.py` — contracts
+cleared, tier 3 clears, adventures, close calls, duels won, portals taken,
+deaths, level, gold, a full set of gear.
+
+They belong to the **player**, not the character, and outlive every death. That
+is only safe because they are purely cosmetic: a title changes no number in a
+fight, so nothing here undoes permadeath. Progress is counted by `bump()` at the
+few moments that matter and *decided* in one place — `sweep()` runs after every
+command and announces anything new — so adding one is a single table row.
+
+## The leaderboard
+
+`!top` (also `!leaderboard`, `!rankings`) ranks living characters by renown,
+contracts cleared and duels won, lists lifetime tier 3 clears across all of a
+player's characters, and keeps a **hall of fame** of the best dead. Five rows a
+category, and categories nobody has scored in are hidden. Works without a
+character.
+
+## The bounty of the day
+
+`!bounty` shows one goal shared by the whole hall — clear N contracts, N of
+tier 2+, N tier 3, or finish an adventure. Everyone's contracts count (a party
+contract counts once, however many were in it). Meet it and the guild is paid a
+lump of renown that scales with the guild's level; it can only be claimed once
+a day. It also appears under `!guild`.
+
+The bounty is drawn from the **UTC date**, so a restart mid-day lands on the
+same one and no timer is needed. The goal is fixed when the day rolls, scaled
+up a quarter of its base per extra person on the books (capped at 3×). Like all
+guild progress it makes nobody's character stronger.
 
 ## Nothing prefixed is ever answered with silence
 
@@ -178,6 +292,11 @@ core/
   game.py      command routing, character creation, guild hall state machine
   chargen.py   races (cosmetic) and classes (mechanical) + ability kits
   persist.py   JSON persistence for Player, Character and graveyard
+  items.py     consumables, gear, the shop and loot tables
+  guild.py     shared guild renown and the perks its tiers unlock
+  achievements.py  account-level titles; counted by bump(), decided by sweep()
+  bounty.py    the guild's daily goal, rolled from the UTC date
+  backup.py    rotating snapshots of the save files
 play.py        offline playtest REPL
 adapters/
   matrix.py    sync loop, event -> handle(), lines -> m.room.message — the

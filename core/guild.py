@@ -59,6 +59,13 @@ class Guild:
     contracts_completed: int = 0
     adventures_completed: int = 0
     members: int = 0
+    # Today's bounty, owned by core/bounty.py. Persisted so a restart mid-day
+    # keeps its progress.
+    bounty_day: str = ""
+    bounty_key: str = ""
+    bounty_goal: int = 0
+    bounty_progress: int = 0
+    bounty_claimed: int = 0
 
     @property
     def tier(self) -> GuildTier:

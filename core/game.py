@@ -19,11 +19,12 @@ normal hall/combat commands.
 from __future__ import annotations
 
 import difflib
+import logging
 import random
 import time
 from dataclasses import replace as _replace
 
-from . import combat
+from . import achievements, bounty, combat
 from .adventures import ADVENTURES, contract_for
 from .chargen import (
     CLASSES,
@@ -48,7 +49,14 @@ from .duel import resolve as duel_resolve
 from .events import EVENTS_BY_KEY, roll_event
 from .events import resolve as resolve_choice
 from .guild import Guild, contribution
-from .items import ITEMS, SHOP_STOCK, match_items, roll_loot
+from .items import (
+    GEAR_SLOT_LABELS,
+    GEAR_SLOTS,
+    ITEMS,
+    SHOP_STOCK,
+    match_items,
+    roll_loot,
+)
 from .party import MAX_PARTY, Parties, Party, scaled_for_party
 from .state import (
     MAX_NAME,
@@ -61,8 +69,11 @@ from .state import (
     focus_regen_for,
 )
 
+log = logging.getLogger("guildhall.admin")
+
 BOARD_SIZE = 3
 REROLL_COST = 5
+MAX_GRANT_QTY = 99
 
 # Decoration only. Kept as lookups here rather than fields on the dataclasses
 # so content tables stay about mechanics and the theatre lives in the view.
@@ -75,7 +86,8 @@ TRAVEL_SECONDS = 0
 
 SLOT_ICONS = {"basic": "⚔️", "signature": "🔥", "defence": "🛡️", "recovery": "💚"}
 ITEM_ICONS = {"heal": "🧪", "focus": "🔮", "damage": "💥", "buff": "🪓",
-              "scroll": "📜", "summon": "📯"}
+              "scroll": "📜", "summon": "📯", "gear": "🧰"}
+GEAR_ICONS = {"weapon": "🗡️", "armour": "🛡️", "charm": "🔮"}
 RACE_ICONS = {"human": "🧑", "elf": "🧝", "dwarf": "🧔", "halfling": "🍄",
               "half_orc": "👹", "gnome": "🎩"}
 MONSTER_ICONS = {"cave_rat": "🐀", "kobold": "👺", "mire_toad": "🐸",
@@ -143,7 +155,16 @@ COMMANDS: tuple[str, ...] = (
     "abilities", "equip", "swap", "graveyard", "who", "guild", "flee", "run",
     "portal", "townportal", "tp", "escape", "give", "gift", "hand",
     "duel", "challenge", "party", "invite", "join", "leave", "disband",
+    "top", "leaderboard", "rankings", "bounty", "titles", "title",
+    "gear", "equipment", "wear", "wield", "remove", "unequip",
 )
+
+# Read-only gear display works in any state; changing kit needs the hall.
+WEAR_WORDS = ("wear", "wield", "don")
+REMOVE_WORDS = ("remove", "unequip", "doff")
+GEAR_VIEW_WORDS = ("gear", "equipment")
+# Account-level commands: nothing here needs a character, a fight, or a room.
+ACCOUNT_WORDS = ("top", "leaderboard", "rankings", "bounty", "titles", "title")
 
 
 def _unknown(word: str, extra: list[str] | None = None) -> list[str]:
@@ -198,19 +219,45 @@ def _mods(hp: int, power: int, focus: int) -> str:
     return ", ".join(parts) if parts else "no modifiers"
 
 
-def render_character(char: Character) -> list[str]:
+def _titled(name: str, player: Player | None) -> str:
+    """`Name the Seasoned` when the player is wearing a title."""
+    title = achievements.title_of(player) if player is not None else ""
+    return f"{name} {title}" if title else name
+
+
+def _sheet_name(char: Character, player: Player | None) -> str:
+    """`Doc the Human Fighter`, or `Doc the Seasoned, Human Fighter` once a
+    title is worn — two 'the's in a row read as a typo."""
+    title = achievements.title_of(player) if player is not None else ""
+    if not title:
+        return char.title
+    return f"{char.name} {title}, {char.race.name} {char.char_class.name}"
+
+
+def _gear_line(char: Character) -> str:
+    worn = {i.slot: i for i in char.worn()}
+    parts = [f"{GEAR_ICONS[slot]} {worn[slot].name}" if slot in worn
+             else f"{GEAR_ICONS[slot]} _—_" for slot in GEAR_SLOTS]
+    return " · ".join(parts)
+
+
+def render_character(char: Character, player: Player | None = None) -> list[str]:
     nxt = renown_for_next(char.renown)
     progress = "max level" if nxt is None else f"{nxt} renown to level {char.level + 1}"
+    earned = (f" · 🏆 {len(player.achievements)}/{len(achievements.ACHIEVEMENTS)}"
+              if player is not None and player.achievements else "")
     return [
         f"{RACE_ICONS.get(char.race_key, '🎭')}"
-        f"{CLASS_ICONS.get(char.class_key, '⚔️')} **{char.title}** — "
+        f"{CLASS_ICONS.get(char.class_key, '⚔️')} "
+        f"**{_sheet_name(char, player)}** — "
         f"Level {char.level} · Guild Rank {char.rank}",
         f"❤️ {char.max_hp} · 💪 {char.power} · ✨ {char.max_focus}",
         f"_{progress}_",
         f"🏅 {char.renown} renown · 💰 {char.gold} gold · "
         f"📜 {char.runs_completed} contracts completed"
         + (f" · ⚔️ {char.duels_won}W/{char.duels_lost}L"
-           if char.duels_won or char.duels_lost else ""),
+           if char.duels_won or char.duels_lost else "") + earned,
+        f"🧰 {_gear_line(char)}",
         "",
         "**Abilities**",
         *[line for i, a in enumerate(char.abilities, 1) for line in (
@@ -386,15 +433,22 @@ def render_spellbook(char: Character) -> list[str]:
 
 def render_shop(char: Character) -> list[str]:
     lines = [f"🧪 **Bramblewick's Sundries** — you have **{char.gold}** gold", ""]
+    shown_gear_header = False
     for i, key in enumerate(SHOP_STOCK, 1):
         item = ITEMS[key]
+        if item.kind == "gear" and not shown_gear_header:
+            lines += ["", "_Kit — one of each, and it stays with you until you "
+                      "don't._", ""]
+            shown_gear_header = True
         afford = "" if char.gold >= item.price else "  _(can't afford)_"
-        icon = ITEM_ICONS.get(item.kind, "🎒")
+        icon = (GEAR_ICONS.get(item.slot) if item.kind == "gear"
+                else ITEM_ICONS.get(item.kind, "🎒"))
         lines.append(f"**{i}. {icon} {item.name}** — {item.price}g{afford}")
         lines.append(f"   _{item.blurb}_ {_effect_of(item)}")
     lines.append("")
-    lines.append("`!buy <n>` or `!buy <n> <qty>`. _'All single use!'_ chirps "
-                 "Bramblewick. _'And it all dies with you! Isn\'t that fun?'_")
+    lines.append("`!buy <n>` or `!buy <n> <qty>`. _'Potions are single use!'_ "
+                 "chirps Bramblewick. _'The kit lasts longer. Not past you, "
+                 "mind. Nothing is.'_")
     return lines
 
 
@@ -408,7 +462,46 @@ def _effect_of(item) -> str:
         return f"({item.damage} damage{armour})"
     if item.kind == "buff":
         return f"(next attack +{int(item.attack_bonus * 100)}%)"
+    if item.kind == "gear":
+        return f"({_gear_bonus_text(item)})"
     return ""
+
+
+def _gear_bonus_text(item) -> str:
+    bits = [f"{value:+d} {label}" for value, label in (
+        (item.bonus_power, "power"), (item.bonus_hp, "HP"),
+        (item.bonus_focus, "focus")) if value]
+    return ", ".join(bits)
+
+
+def _spare_gear(char: Character) -> list[str]:
+    """Gear in the bag, in the order `!wear <n>` numbers it."""
+    return [k for k in sorted(char.inventory)
+            if k in ITEMS and ITEMS[k].kind == "gear"]
+
+
+def render_gear(char: Character) -> list[str]:
+    worn = {i.slot: i for i in char.worn()}
+    lines = [f"🧰 **{char.name}'s kit**", ""]
+    for slot in GEAR_SLOTS:
+        item = worn.get(slot)
+        label = f"{GEAR_ICONS[slot]} **{GEAR_SLOT_LABELS[slot]}**"
+        if item is None:
+            lines.append(f"  {label} — _nothing_")
+        else:
+            lines.append(f"  {label} — {item.name} _({_gear_bonus_text(item)})_")
+            lines.append(f"       _{item.blurb}_")
+
+    spare = _spare_gear(char)
+    if spare:
+        lines += ["", "**In the bag**"]
+        for i, key in enumerate(spare, 1):
+            item = ITEMS[key]
+            lines.append(f"  **{i}.** {GEAR_ICONS[item.slot]} {item.name} "
+                         f"×{char.inventory[key]} _({_gear_bonus_text(item)})_")
+    lines += ["", "`!wear <n>` or `!wear <name>` · `!remove <slot>` — "
+              "hall only. _Gear dies with you, like everything else._"]
+    return lines
 
 
 def render_inventory(char: Character) -> list[str]:
@@ -426,6 +519,89 @@ def render_inventory(char: Character) -> list[str]:
     lines.append("")
     lines.append(f"**{char.gold}** gold. `!shop` to spend it, `!use <item>` in a fight.")
     return lines
+
+
+def _top_lines(title: str, rows: list[tuple[str, int]], unit: str,
+               limit: int = 5) -> list[str]:
+    rows = [(n, v) for n, v in rows if v > 0]
+    if not rows:
+        return []
+    rows.sort(key=lambda r: (-r[1], r[0].lower()))
+    medals = ("🥇", "🥈", "🥉")
+    lines = [f"**{title}**"]
+    for i, (name, value) in enumerate(rows[:limit]):
+        rank = medals[i] if i < len(medals) else f"**{i + 1}.**"
+        lines.append(f"  {rank} {name} — {value} {unit}")
+    lines.append("")
+    return lines
+
+
+def render_top(roster: dict[str, Player] | None) -> list[str]:
+    """Leaderboards. Living characters compete; the dead keep their legend."""
+    if not roster:
+        return ["Nobody has signed the register yet. _The leaderboard is "
+                "extremely easy to top._"]
+
+    living = [p for p in roster.values() if p.character is not None]
+
+    def label(p: Player, name: str) -> str:
+        return _titled(name, p)
+
+    sections = [
+        *_top_lines("🏅 Renown", [(label(p, p.character.name), p.character.renown)
+                                  for p in living], "renown"),
+        *_top_lines("📜 Contracts (this character)",
+                    [(label(p, p.character.name), p.character.runs_completed)
+                     for p in living], "cleared"),
+        *_top_lines("🗡️ Deep delvers (tier 3, all characters)",
+                    [(label(p, p.display_name), achievements.stat(p, "tier3"))
+                     for p in roster.values()], "cleared"),
+        *_top_lines("⚔️ Duellists", [(label(p, p.character.name),
+                                      p.character.duels_won) for p in living],
+                    "wins"),
+    ]
+
+    fallen = [(f"{t.name} the {t.char_class} _({p.display_name})_", t.renown)
+              for p in roster.values() for t in p.graveyard]
+    sections += _top_lines("🪦 Hall of fame — the best of the dead", fallen,
+                           "renown")
+
+    while sections and sections[-1] == "":
+        sections.pop()
+    if not sections:
+        return ["Nothing to rank yet. _Go and clear a contract._"]
+    return ["🏆 **The Leaderboard**", "", *sections]
+
+
+def render_titles(player: Player) -> list[str]:
+    earned = len(player.achievements)
+    lines = [f"🏆 **Achievements** — {earned}/{len(achievements.ACHIEVEMENTS)}", ""]
+    for i, ach in enumerate(achievements.ACHIEVEMENTS, 1):
+        if ach.key in player.achievements:
+            worn = " ← **wearing**" if ach.key == player.title_key else ""
+            lines.append(f"  **{i}.** ✅ **{ach.name}** — _{ach.title}_{worn}")
+        else:
+            lines.append(f"  **{i}.** 🔒 {ach.name} — _{ach.hint}_")
+    lines += ["", "`!title <n>` to wear one · `!title none` to go bare. "
+              "_Titles are for show — they change nothing in a fight._"]
+    return lines
+
+
+def _title_command(player: Player, args: list[str]) -> list[str]:
+    if not args:
+        return render_titles(player)
+    text = " ".join(args)
+    if text.lower() in ("none", "off", "clear", "remove"):
+        player.title_key = ""
+        return ["Title removed. _Just a name, standing there._"]
+    ach = achievements.find(text)
+    if ach is None:
+        return [f"No achievement matches '{text}'.", "", *render_titles(player)]
+    if ach.key not in player.achievements:
+        return [f"🔒 **{ach.name}** isn't yours yet.", f"_{ach.hint}_"]
+    player.title_key = ach.key
+    name = player.character.name if player.character else player.display_name
+    return [f"Now known as **{_titled(name, player)}**."]
 
 
 def render_graveyard(player: Player) -> list[str]:
@@ -733,8 +909,24 @@ def start_run(char: Character, quest, seed: int | None = None) -> list[str]:
     ]
 
 
-def _advance_after_kill(char: Character,
-                        guild: Guild | None = None) -> list[str]:
+def _record_completion(player: Player | None, tier: int, *, adventure: bool,
+                       hp_left: int | None) -> None:
+    """Count a cleared contract towards the player's lifetime stats."""
+    if player is None:
+        return
+    achievements.bump(player, "contracts")
+    if tier >= 2:
+        achievements.bump(player, "tier2")
+    if tier >= 3:
+        achievements.bump(player, "tier3")
+    if adventure:
+        achievements.bump(player, "adventures")
+    if hp_left is not None and 0 < hp_left <= 3:
+        achievements.bump(player, "close_calls")
+
+
+def _advance_after_kill(char: Character, guild: Guild | None = None,
+                        player: Player | None = None) -> list[str]:
     run = char.run
     assert run is not None
     run.stage += 1
@@ -746,6 +938,9 @@ def _advance_after_kill(char: Character,
         char.renown += run.quest.renown
         char.runs_completed += 1
         char.run = None
+        _record_completion(player, run.quest.tier,
+                           adventure=bool(run.quest.adventure_key),
+                           hp_left=run.hp)
         lines = [
             "",
             f"🎉 **CONTRACT COMPLETE — {run.quest.name}** 🎉",
@@ -800,6 +995,8 @@ def _advance_after_kill(char: Character,
                 lines.append(f"🎊 **THE GUILD IS NOW {guild.tier.name.upper()}!** 🎊")
                 lines.append(f"_{guild.tier.blurb}_")
                 lines.append("`!guild` to see what that changes.")
+            lines += bounty.record(guild, run.quest.tier,
+                                   bool(run.quest.adventure_key))
 
         roll_board(char, run.rng, _board_size(guild))
         lines.append("")
@@ -881,8 +1078,9 @@ def render_roster(roster: dict[str, Player] | None) -> list[str]:
     for p in sorted(living, key=lambda p: -p.character.renown):
         c = p.character
         where = "on contract" if c.run else "in the hall"
-        lines.append(f"  **{c.name}** the {c.race.name} {c.char_class.name} — "
-                     f"L{c.level}, {c.renown} renown, {where}")
+        lines.append(f"  **{_titled(c.name, p)}** the {c.race.name} "
+                     f"{c.char_class.name} — L{c.level}, {c.renown} renown, "
+                     f"{where}")
 
     fallen = sum(p.deaths for p in roster.values())
     if fallen:
@@ -1169,6 +1367,9 @@ def _party_victory(party: Party, roster: dict[str, Player] | None,
         run = char.run
         if run is not None and run.hp <= 0:
             revived.append(char.name)
+        _record_completion(member, contract.tier,
+                           adventure=bool(contract.adventure_key),
+                           hp_left=run.hp if run is not None and run.hp > 0 else None)
         char.run = None
         char.gold += contract.gold
         char.renown += contract.renown
@@ -1194,6 +1395,8 @@ def _party_victory(party: Party, roster: dict[str, Player] | None,
         lines.append(f"🏰 _The guild is **{gained}** renown richer._")
         if guild.level > before:
             lines.append(f"🎊 **THE GUILD IS NOW {guild.tier.name.upper()}!** 🎊")
+        lines += bounty.record(guild, contract.tier,
+                               bool(contract.adventure_key))
 
     party.contract = None
     party.encounter = None
@@ -1303,6 +1506,7 @@ def _duel_finish(duel: Duel, winner_mxid: str, roster: dict[str, Player] | None,
     if winner and winner.character:
         winner.character.duels_won += 1
         winner.character.renown += WIN_RENOWN
+        achievements.bump(winner, "duels_won")
     if loser and loser.character:
         loser.character.duels_lost += 1
         loser.character.barmaid_until = time.time() + BAR_DUTY_HOURS * 3600
@@ -1473,6 +1677,8 @@ def render_guild(guild: Guild | None,
         f"  🌀 Scrolls turn up **×{tier.scroll_bonus}** as often",
         "",
         "_Guild renown is shared, and death cannot take it._",
+        "",
+        *bounty.render(guild),
     ]
     if roster:
         living = sum(1 for p in roster.values() if p.character is not None)
@@ -1487,7 +1693,30 @@ def handle(player: Player, text: str,
            parties: Parties | None = None,
            duels: Duels | None = None,
            mentions: list[str] | None = None,
-           private: bool = False) -> list[str] | None:
+           private: bool = False,
+           admin: bool = False) -> list[str] | None:
+    """Answer one message, then announce anything it earned the sender.
+
+    `admin` is decided by the adapter from its own config and is never read
+    from the message: the game cannot tell a real operator from somebody
+    typing `!admin`.
+    """
+    reply = _dispatch(player, text, roster, guild, parties, duels, mentions,
+                      private, admin)
+    if reply is None:
+        return None
+    news = achievements.sweep(player)
+    return [*reply, "", *news] if news else reply
+
+
+def _dispatch(player: Player, text: str,
+              roster: dict[str, Player] | None,
+              guild: Guild | None,
+              parties: Parties | None,
+              duels: Duels | None,
+              mentions: list[str] | None,
+              private: bool,
+              admin: bool) -> list[str] | None:
     # A mention names a player exactly; text matching is the fallback.
     mention = next((m for m in (mentions or []) if m != player.mxid), None)
 
@@ -1499,6 +1728,12 @@ def handle(player: Player, text: str,
     body = raw[1:].strip()
     if not body:
         return None
+
+    # 0. Operator commands. Checked first so they work in any state, and only
+    #    when the adapter has vouched for the sender.
+    if admin and body.split(None, 1)[0].lower() == "admin":
+        return _admin_commands(player, body.split()[1:], roster, guild,
+                               parties, duels, mentions)
 
     # 1. Mid-creation: the register is waiting on this player's next `!` line.
     if player.pending is not None:
@@ -1513,6 +1748,8 @@ def handle(player: Player, text: str,
             return begin_creation(player)
         if word == "graveyard":
             return render_graveyard(player)
+        if word in ACCOUNT_WORDS:
+            return _account_commands(player, word, parts[1:], roster, guild)
         if word == "help":
             return _help(player)
         if word in ("board", "quests", "status", "accept", "me", "shop",
@@ -1549,6 +1786,18 @@ def handle(player: Player, text: str,
                     "_This is the side door — contracts, adventures, shopping "
                     "and the spellbook all work fine here._"]
 
+    # 2a. Account-level commands and the read-only gear screen work in every
+    #     state. Changing kit does not — that needs the hall.
+    if word in ACCOUNT_WORDS:
+        return _account_commands(player, word, parts[1:], roster, guild)
+    if word in GEAR_VIEW_WORDS:
+        return render_gear(char)
+    if (word in WEAR_WORDS or word in REMOVE_WORDS) and (
+            char.run is not None or duel is not None
+            or (party is not None and party.on_contract)):
+        return ["Not out on a contract — you change kit back at the hall.",
+                "_Nobody buckles armour with a wolf on them._"]
+
     # 2b. A live duel is exclusive and binding. Nothing else runs until it
     #     is settled — that is the whole point of accepting one.
     if duel is not None:
@@ -1577,7 +1826,7 @@ def handle(player: Player, text: str,
             return ["Not in the middle of a duel.", "",
                     *render_duel(duel, player.mxid)]
         if word in ("status", "me", "char", "sheet"):
-            return render_character(char)
+            return render_character(char, player)
         if word == "help":
             return _help(player)
         if word.isdigit():
@@ -1606,7 +1855,7 @@ def handle(player: Player, text: str,
         if word == "party":
             return render_party(party, roster, player.mxid)
         if word in ("status", "me", "char", "sheet"):
-            return render_character(char)
+            return render_character(char, player)
         if word in ("bag", "inventory", "items"):
             return render_inventory(char)
         if word == "use":
@@ -1620,9 +1869,9 @@ def handle(player: Player, text: str,
     # 3a2. On the road. Nothing to fight until they arrive.
     if char.run is not None and char.run.travelling:
         if word in ("portal", "townportal", "tp", "escape", "flee", "run"):
-            return _portal(char)
+            return _portal(char, player)
         if word in ("status", "me", "char", "sheet"):
-            return render_character(char)
+            return render_character(char, player)
         if word in ("bag", "inventory", "items"):
             return render_inventory(char)
         if word in ("spellbook", "spells", "book", "abilities"):
@@ -1639,9 +1888,9 @@ def handle(player: Player, text: str,
         if chosen is not None:
             return chosen
         if word in ("portal", "townportal", "tp", "escape", "flee", "run"):
-            return _portal(char)
+            return _portal(char, player)
         if word in ("status", "me", "char", "sheet"):
-            return render_character(char)
+            return render_character(char, player)
         if word in ("bag", "inventory", "items"):
             return render_inventory(char)
         if word == "help":
@@ -1660,7 +1909,7 @@ def handle(player: Player, text: str,
             lines = combat.player_turn(char, ab)
             if not char.run.encounter.alive:
                 lines.append(f"The {char.run.encounter.monster.name} falls.")
-                return lines + _advance_after_kill(char, guild)
+                return lines + _advance_after_kill(char, guild, player)
 
             lines += combat.monster_turn(char)
             if not char.run.alive:
@@ -1688,9 +1937,9 @@ def handle(player: Player, text: str,
             return ["You're out on a contract. _Finish it first._"]
 
         if word in ("portal", "townportal", "tp", "escape", "flee", "run"):
-            return _portal(char)
+            return _portal(char, player)
         if word in ("status", "me", "char"):
-            return render_character(char)
+            return render_character(char, player)
         if word == "help":
             return _help(player)
 
@@ -1737,6 +1986,12 @@ def handle(player: Player, text: str,
     if word in ("equip", "swap", "learn"):
         return _equip(char, parts[1:])
 
+    if word in WEAR_WORDS:
+        return _wear(char, parts[1:])
+
+    if word in REMOVE_WORDS:
+        return _remove(char, parts[1:])
+
     if word in ("portal", "townportal", "tp", "escape", "flee", "run"):
         return ["🌀 _You cast Town Portal._",
                 "_It deposits you in the guild hall, where you already were._",
@@ -1773,7 +2028,7 @@ def handle(player: Player, text: str,
         return _use_in_hall(char, parts[1:])
 
     if word in ("status", "me", "char", "sheet"):
-        return render_character(char)
+        return render_character(char, player)
 
     if word == "graveyard":
         return render_graveyard(player)
@@ -1807,6 +2062,138 @@ def handle(player: Player, text: str,
                 "`!accept <n>` to take a contract."]
 
     return _unknown(word)
+
+
+def _account_commands(player: Player, word: str, args: list[str],
+                      roster: dict[str, Player] | None,
+                      guild: Guild | None) -> list[str]:
+    if word in ("top", "leaderboard", "rankings"):
+        return render_top(roster)
+    if word == "bounty":
+        return bounty.render(guild)
+    return _title_command(player, args)
+
+
+ADMIN_HELP = [
+    "🛠️ **Operator commands**",
+    "  `!admin players` — everyone on the books, with their ids",
+    "  `!admin reset <who>` — delete a character (no tombstone, no undo)",
+    "  `!admin grant <who> gold <n>` — give (or take, with a minus) gold",
+    "  `!admin grant <who> item <name> [qty]` — put something in their bag",
+    "  `!admin boards` — re-post the board for everyone in the hall",
+    "  `!admin bounty` · `!admin bounty reroll` — see or redraw today's bounty",
+    "  `!admin announce <text>` — post a notice in the hall",
+    "  `!admin backup` — snapshot the save files now",
+    "_Everything here is logged._",
+]
+
+
+def _admin_target(token: str, player: Player,
+                  roster: dict[str, Player] | None,
+                  mentions: list[str] | None) -> tuple[Player | None, list[str]]:
+    """One player, or (None, the reply explaining why not)."""
+    mention = next((m for m in (mentions or []) if m != player.mxid), None)
+    people = _match_players(token, roster or {}, "", mention)
+    if not people:
+        return None, [f"Nobody with a character matches '{token}'. `!admin players`"]
+    if len(people) > 1:
+        return None, ["Which one? " + " · ".join(
+            f"{p.character.name} ({p.mxid})" for p in people)]
+    return people[0], []
+
+
+def _admin_commands(player: Player, args: list[str],
+                    roster: dict[str, Player] | None,
+                    guild: Guild | None,
+                    parties: Parties | None,
+                    duels: Duels | None,
+                    mentions: list[str] | None) -> list[str]:
+    if not args or args[0].lower() == "help":
+        return ADMIN_HELP
+    sub = args[0].lower()
+    rest = args[1:]
+    log.info("admin %s: !admin %s", player.mxid, " ".join(args))
+
+    if sub == "players":
+        people = list((roster or {}).values())
+        if not people:
+            return ["Nobody has spoken to the bot yet."]
+        lines = [f"🛠️ **{len(people)} on the books**"]
+        for p in sorted(people, key=lambda p: p.mxid):
+            c = p.character
+            what = (f"{c.name} L{c.level} {c.char_class.name}, {c.renown} renown, "
+                    f"{c.gold}g" if c else "_no character_")
+            lines.append(f"  `{p.mxid}` — {what}")
+        return lines
+
+    if sub == "reset":
+        if not rest:
+            return ["`!admin reset <who>`"]
+        target, why = _admin_target(rest[0], player, roster, mentions)
+        if target is None:
+            return why
+        if parties is not None and parties.for_member(target.mxid):
+            return [f"**{target.character.name}** is in a party. Have them "
+                    "`!leave` first."]
+        if duels is not None and (duels.for_player(target.mxid)
+                                  or duels.pending_for(target.mxid)):
+            return [f"**{target.character.name}** is in a duel. Let it finish."]
+        name = target.character.name
+        target.character = None
+        target.pending = None
+        log.warning("admin %s reset %s (%s)", player.mxid, name, target.mxid)
+        return [f"🛠️ **{name}** is gone — no tombstone. {target.mxid} can "
+                "`!create` again."]
+
+    if sub == "grant":
+        if len(rest) < 3:
+            return ["`!admin grant <who> gold <n>` or "
+                    "`!admin grant <who> item <name> [qty]`"]
+        target, why = _admin_target(rest[0], player, roster, mentions)
+        if target is None:
+            return why
+        char = target.character
+        kind = rest[1].lower()
+        if kind == "gold":
+            try:
+                amount = int(rest[2])
+            except ValueError:
+                return ["Gold must be a whole number."]
+            char.gold = max(0, char.gold + amount)
+            return [f"🛠️ **{char.name}** now has **{char.gold}** gold "
+                    f"({amount:+d})."]
+        if kind == "item":
+            qty = 1
+            name_parts = rest[2:]
+            if len(name_parts) > 1 and name_parts[-1].isdigit():
+                qty = min(MAX_GRANT_QTY, int(name_parts.pop()))
+            matches = match_items(" ".join(name_parts), tuple(ITEMS))
+            if not matches:
+                return [f"No item matches '{' '.join(name_parts)}'."]
+            if len(matches) > 1:
+                return ["Which one? " + " · ".join(m.name for m in matches)]
+            item = matches[0]
+            char.inventory[item.key] = char.inventory.get(item.key, 0) + qty
+            return [f"🛠️ **{char.name}** receives {qty} × **{item.name}**."]
+        return ["Grant `gold` or `item`."]
+
+    if sub == "boards":
+        count = 0
+        for p in (roster or {}).values():
+            if p.character is not None and p.character.run is None:
+                roll_board(p.character, size=_board_size(guild))
+                count += 1
+        return [f"🛠️ Re-posted the board for **{count}** character"
+                f"{'' if count == 1 else 's'} in the hall."]
+
+    if sub == "bounty":
+        if guild is None:
+            return ["No guild is open."]
+        if rest and rest[0].lower() == "reroll":
+            bounty.reroll(guild)
+        return bounty.render(guild)
+
+    return [f"Unknown operator command `{sub}`.", "", *ADMIN_HELP]
 
 
 def _resolve_ability(char: Character, word: str):
@@ -2048,6 +2435,8 @@ def _use_in_party(player: Player, party: Party, args: list[str],
         return _summon(player, args[1:], roster, parties, party)
     if item.kind == "scroll":
         return ["Not mid-fight."]
+    if item.kind == "gear":
+        return [f"**{item.name}** is worn, not used — and not mid-fight."]
     if party.next_actor(_standing(party, roster)) != player.mxid:
         return [f"_Wait your turn._ It's "
                 f"**{_name_of(party.next_actor(_standing(party, roster)), roster)}**'s move."]
@@ -2071,6 +2460,7 @@ def _party_portal(player: Player, party: Party,
     for member in _members_of(party, roster):
         char = member.character
         char.portals_used += 1
+        achievements.bump(member, "portals")
         char.run = None
         roll_board(char, party.rng)
         names.append(char.name)
@@ -2135,6 +2525,12 @@ def _buy(char: Character, args: list[str]) -> list[str]:
             return ["How many? `!buy 1 3` buys three."]
         qty = int(args[1])
 
+    if item.kind == "gear":
+        if qty > 1:
+            return [f"One {item.name} is plenty. _You only have the one body._"]
+        if item.key in char.inventory or char.equipment.get(item.slot) == item.key:
+            return [f"You already have a {item.name}."]
+
     total = item.price * qty
     if total > char.gold:
         affordable = char.gold // item.price
@@ -2151,6 +2547,61 @@ def _buy(char: Character, args: list[str]) -> list[str]:
     ]
 
 
+def _wear(char: Character, args: list[str]) -> list[str]:
+    """Put a piece of gear on. Whatever it replaces goes back in the bag."""
+    spare = _spare_gear(char)
+    if not args:
+        return ["Wear what? `!wear 1`, or `!wear cudgel`.", "", *render_gear(char)]
+    if not spare:
+        return ["Nothing in your bag to wear. _Bramblewick sells some kit, "
+                "and contracts drop more._ `!shop`"]
+
+    matches = match_items(args[0], spare)
+    if not matches:
+        return [f"You're not carrying '{args[0]}'.", "", *render_gear(char)]
+    if len(matches) > 1:
+        return ["Which one? " + " · ".join(m.name for m in matches)]
+    item = matches[0]
+
+    char.inventory[item.key] -= 1
+    if char.inventory[item.key] <= 0:
+        del char.inventory[item.key]
+
+    lines = []
+    previous = char.equipment.get(item.slot)
+    if previous:
+        char.inventory[previous] = char.inventory.get(previous, 0) + 1
+        lines.append(f"_{ITEMS[previous].name} goes back in the bag._")
+    char.equipment[item.slot] = item.key
+
+    lines.insert(0, f"{GEAR_ICONS[item.slot]} **{char.name}** puts on "
+                    f"**{item.name}** _({_gear_bonus_text(item)})_.")
+    lines.append(f"❤️ {char.max_hp} · 💪 {char.power} · ✨ {char.max_focus}")
+    return lines
+
+
+def _remove(char: Character, args: list[str]) -> list[str]:
+    if not args:
+        return ["Remove what? `!remove weapon`, `!remove armour`, "
+                "`!remove charm`.", "", *render_gear(char)]
+    token = args[0].lower()
+    slot = next((s for s in GEAR_SLOTS if s.startswith(token)), None)
+    if slot is None:
+        worn = [i for i in char.worn()
+                if token in i.name.lower() or token == i.key]
+        slot = worn[0].slot if len(worn) == 1 else None
+    if slot is None:
+        return [f"Nothing worn matches '{args[0]}'.", "", *render_gear(char)]
+    key = char.equipment.get(slot)
+    if not key:
+        return [f"You aren't wearing a {slot}."]
+
+    del char.equipment[slot]
+    char.inventory[key] = char.inventory.get(key, 0) + 1
+    return [f"{GEAR_ICONS[slot]} **{ITEMS[key].name}** comes off and goes in the "
+            "bag."]
+
+
 def _use_in_hall(char: Character, args: list[str]) -> list[str]:
     """Only scrolls work outside a fight — everything else is for emergencies."""
     if not args:
@@ -2165,6 +2616,8 @@ def _use_in_hall(char: Character, args: list[str]) -> list[str]:
         return ["Which one? " + " · ".join(m.name for m in matches)]
 
     item = matches[0]
+    if item.kind == "gear":
+        return [f"**{item.name}** is worn, not used. `!wear {item.name.lower()}`"]
     if item.kind == "scroll" and char.on_bar_duty:
         return _bar_duty_refusal(char)
     if item.kind != "scroll":
@@ -2219,6 +2672,10 @@ def _use(char: Character, args: list[str], player: Player,
         return ["Not mid-fight. _Reading a teleport scroll with something "
                 "chewing on you is how people end up inside walls._",
                 "", *render_combat(char)]
+    if item.kind == "gear":
+        return [f"**{item.name}** is worn, not used — and not mid-fight. "
+                "_Nobody buckles armour with a wolf on them._",
+                "", *render_combat(char)]
 
     # Refuse rather than silently burn a single-use item for no effect.
     run = char.run
@@ -2235,7 +2692,7 @@ def _use(char: Character, args: list[str], player: Player,
     lines = combat.use_item(char, item)
     if not char.run.encounter.alive:
         lines.append(f"The {char.run.encounter.monster.name} falls.")
-        return lines + _advance_after_kill(char, guild)
+        return lines + _advance_after_kill(char, guild, player)
 
     lines += combat.monster_turn(char)
     if not char.run.alive:
@@ -2285,11 +2742,13 @@ def _event_choice(player: Player, word: str) -> list[str] | None:
     return lines + _resume_after_event(char)
 
 
-def _portal(char: Character) -> list[str]:
+def _portal(char: Character, player: Player | None = None) -> list[str]:
     """Bail out. No gold, no renown, no loot — and the clerk keeps score."""
     run = char.run
     assert run is not None
     char.portals_used += 1
+    if player is not None:
+        achievements.bump(player, "portals")
     char.run = None
     roll_board(char, run.rng)
 
@@ -2334,8 +2793,11 @@ def _help(player: Player) -> list[str]:
         "  `!status` — your sheet · also `!me` `!char` `!sheet`",
         "  `!spellbook` — abilities known, equipped and locked · also `!spells`",
         "  `!equip <name>` — swap an ability into its slot _(hall only)_",
+        "  `!gear` — what you're wearing and carrying · `!wear <n>` · "
+        "`!remove <slot>` _(hall only)_",
         "  `!inventory` — what you're carrying · also `!bag` `!items`",
         "  `!graveyard` — your fallen",
+        "  `!titles` — achievements · `!title <n>` to wear one",
         "",
         "**Guild hall**",
         "  `!board` — read the quest board · also `!quests`",
@@ -2345,6 +2807,8 @@ def _help(player: Player) -> list[str]:
         "  `!buy <n>` — buy one · `!buy <n> <qty>` for more",
         "  `!give <who> <item>` — hand something over",
         "  `!who` — everyone on the books · `!guild` — the charter",
+        "  `!top` — leaderboards and the hall of fame",
+        "  `!bounty` — today's goal for the whole guild",
         "",
         "**Party** _(share a monster, not a health bar)_",
         f"  `!party` — start one, or see yours _(up to {MAX_PARTY})_",

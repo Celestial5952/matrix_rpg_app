@@ -22,7 +22,7 @@ from .adventures import ADVENTURES, contract_for
 from .chargen import CLASSES_BY_KEY, RACES_BY_KEY, SLOTS
 from .content import MODIFIERS_BY_KEY, MONSTERS, QUESTS_BY_KEY, scaled_monster
 from .guild import Guild
-from .items import ITEMS
+from .items import GEAR_SLOTS, ITEMS
 from .state import Character, Contract, Encounter, Player, Run, Tombstone
 
 log = logging.getLogger("guildhall.persist")
@@ -44,6 +44,7 @@ _CHARACTER_FIELDS: dict[str, object] = {
     "created_at": 0.0,
     "inventory": None,  # None -> {}; see _inventory_from
     "loadout": None,    # None -> {}; see _loadout_from
+    "equipment": None,  # None -> {}; see _equipment_from
 }
 
 # Run fields stored verbatim. The encounter, contract and RNG need rebuilding.
@@ -74,6 +75,7 @@ def _character_from(row: object, mxid: str) -> Character | None:
         kwargs["barmaid_until"] = 0.0
     kwargs["inventory"] = _inventory_from(kwargs["inventory"])
     kwargs["loadout"] = _loadout_from(kwargs["loadout"], kwargs["class_key"])
+    kwargs["equipment"] = _equipment_from(kwargs["equipment"])
     run = _run_from_dict(row.get("run"))
     # A character whose race or class was deleted from chargen.py cannot be
     # rendered or fought with. Dropping it loses that character; keeping it
@@ -105,6 +107,22 @@ def _inventory_from(raw: object) -> dict[str, int]:
     for key, count in raw.items():
         if key in ITEMS and isinstance(count, int) and count > 0:
             out[key] = count
+    return out
+
+
+def _equipment_from(raw: object) -> dict[str, str]:
+    """Keep only worn gear that still exists and still fits that slot.
+
+    Dropped silently rather than returned to the bag: a piece removed from the
+    game has nowhere to go.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for slot, key in raw.items():
+        item = ITEMS.get(key) if isinstance(key, str) else None
+        if slot in GEAR_SLOTS and item is not None and item.slot == slot:
+            out[slot] = key
     return out
 
 
@@ -144,6 +162,24 @@ def _tombstones_from(rows: object) -> list[Tombstone]:
         except TypeError:
             continue
     return out
+
+
+def _stats_from(raw: object) -> dict[str, int]:
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items()
+            if isinstance(k, str) and isinstance(v, int)
+            and not isinstance(v, bool) and v >= 0}
+
+
+def _achievements_from(raw: object) -> dict[str, float]:
+    """Unlocks for achievements that still exist, with their unlock times."""
+    from .achievements import ACHIEVEMENTS_BY_KEY
+    if not isinstance(raw, dict):
+        return {}
+    return {k: float(v) for k, v in raw.items()
+            if k in ACHIEVEMENTS_BY_KEY and isinstance(v, (int, float))
+            and not isinstance(v, bool)}
 
 
 def _contract_to_dict(c: Contract) -> dict:
@@ -292,6 +328,10 @@ def load_all(path: Path) -> dict[str, Player]:
             display_name=row.get("display_name") or row.get("name") or mxid,
             character=_character_from(row.get("character"), mxid),
             graveyard=_tombstones_from(row.get("graveyard")),
+            stats=_stats_from(row.get("stats")),
+            achievements=_achievements_from(row.get("achievements")),
+            title_key=row.get("title_key")
+            if isinstance(row.get("title_key"), str) else "",
         )
     return players
 
@@ -310,6 +350,9 @@ def save_all(path: Path, players: dict[str, Player]) -> None:
             "graveyard": [
                 {k: getattr(t, k) for k in _TOMBSTONE_FIELDS} for t in p.graveyard
             ],
+            "stats": dict(p.stats),
+            "achievements": dict(p.achievements),
+            "title_key": p.title_key,
         }
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(raw, indent=2, sort_keys=True))
@@ -326,7 +369,11 @@ _GUILD_FIELDS: dict[str, object] = {
     "contracts_completed": 0,
     "adventures_completed": 0,
     "members": 0,
+    "bounty_goal": 0,
+    "bounty_progress": 0,
+    "bounty_claimed": 0,
 }
+_GUILD_TEXT_FIELDS: dict[str, str] = {"bounty_day": "", "bounty_key": ""}
 
 
 def load_guild(path: Path) -> Guild:
@@ -347,12 +394,17 @@ def load_guild(path: Path) -> Guild:
     values = {}
     for key, default in _GUILD_FIELDS.items():
         value = raw.get(key, default)
-        values[key] = value if isinstance(value, int) and value >= 0 else default
+        values[key] = (value if isinstance(value, int)
+                       and not isinstance(value, bool) and value >= 0
+                       else default)
+    for key, default in _GUILD_TEXT_FIELDS.items():
+        value = raw.get(key, default)
+        values[key] = value if isinstance(value, str) else default
     return Guild(**values)
 
 
 def save_guild(path: Path, guild: Guild) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps({k: getattr(guild, k) for k in _GUILD_FIELDS},
-                              indent=2, sort_keys=True))
+    fields = {k: getattr(guild, k) for k in (*_GUILD_FIELDS, *_GUILD_TEXT_FIELDS)}
+    tmp.write_text(json.dumps(fields, indent=2, sort_keys=True))
     tmp.replace(path)

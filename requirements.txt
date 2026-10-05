@@ -2,3 +2,6 @@ matrix-nio>=0.24
 
 # tests
 pytest>=7
+
+# lint
+ruff>=0.6

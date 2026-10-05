@@ -13,6 +13,9 @@ Environment:
     MATRIX_TOKEN        an existing access token skips interactive login
     MATRIX_ROOM_ID      !abc123:example.org — the guild hall room
     MATRIX_STATE_DIR    where players.json + the sync token live (default: store)
+    MATRIX_ADMINS       comma-separated MXIDs allowed to use !admin (default: none)
+    MATRIX_BACKUP_HOURS hours between save-file snapshots; 0 disables (default: 24)
+    MATRIX_BACKUP_KEEP  how many snapshots to keep (default: 14)
 
 Run from the repo root, as a module (so `core` resolves):
 
@@ -44,6 +47,7 @@ from nio import (
     WhoamiResponse,
 )
 
+from core.backup import snapshot
 from core.duel import Duels
 from core.game import arrive, handle, set_travel_pace
 from core.guild import Guild
@@ -99,6 +103,18 @@ class Bot:
         self.players_path = state_dir / "players.json"
         self.guild_path = state_dir / "guild.json"
         self.sync_token_path = state_dir / "sync_token"
+        self.state_dir = state_dir
+
+        # Operators are named in config, never in chat: the game cannot tell a
+        # real admin from somebody typing "!admin", so the adapter vouches.
+        self.admins = {a.strip() for a in
+                       os.environ.get("MATRIX_ADMINS", "").split(",") if a.strip()}
+        for admin in self.admins:
+            if not re.fullmatch(r"@[^:\s]+:\S+", admin):
+                log.warning("MATRIX_ADMINS entry %r does not look like an MXID "
+                            "(@user:server) and will never match", admin)
+        self.backup_hours = max(0.0, float(os.environ.get("MATRIX_BACKUP_HOURS", "24")))
+        self.backup_keep = max(1, int(os.environ.get("MATRIX_BACKUP_KEEP", "14")))
 
         # "post" -- every turn is its own message, nothing removed, everything
         # in the main timeline. Chosen because the edited frame drifts upward
@@ -321,12 +337,19 @@ class Bot:
         private = room.room_id != self.room_id
         was_fighting = player.in_combat
 
+        is_admin = event.sender in self.admins
+        if is_admin:
+            handled = await self._admin_command(event.body)
+            if handled is not None:
+                await self._send(handled, room_id=room.room_id)
+                return
+
         # One malformed command must not kill the sync loop. Without this, an
         # unhandled exception in game logic takes the bot down for everyone.
         try:
             reply = handle(player, event.body, self.players, self.guild,
                            self.parties, self.duels, self._mentions(event),
-                           private)
+                           private, is_admin)
         except Exception:
             log.exception("handle() raised on %r from %s", event.body, event.sender)
             await self._send(["Something went wrong resolving that. "
@@ -337,16 +360,63 @@ class Bot:
         if reply is None:
             return
 
+        self._save()
+
+        await self._deliver(player, reply, was_fighting, room.room_id)
+
+    async def _admin_command(self, body: str) -> list[str] | None:
+        """Operator commands that need Matrix, so can't live in core/.
+
+        Returns the reply, or None to let core/ handle it (everything else
+        under `!admin`).
+        """
+        parts = body.strip().split(None, 2)
+        if len(parts) < 2 or parts[0].lower() != "!admin":
+            return None
+        sub = parts[1].lower()
+
+        if sub == "announce":
+            text = parts[2].strip() if len(parts) > 2 else ""
+            if not text:
+                return ["`!admin announce <text>` — posts a notice in the hall."]
+            log.info("admin announcement: %s", text)
+            sent = await self._send(["📣 **Notice from the guild**", text],
+                                    room_id=self.room_id)
+            return ["📣 Posted to the hall."] if sent else [
+                "Couldn't post to the hall — see the bot log."]
+
+        if sub == "backup":
+            self._save()
+            path = await asyncio.to_thread(snapshot, self.state_dir,
+                                           self.backup_keep)
+            if path is None:
+                return ["Nothing new to back up — the newest snapshot already "
+                        "matches the live files."]
+            return [f"💾 Snapshot written: `{path.name}`."]
+        return None
+
+    def _save(self) -> bool:
         self.guild.members = sum(1 for p in self.players.values()
                                  if p.character is not None)
         try:
             save_all(self.players_path, self.players)
             save_guild(self.guild_path, self.guild)
+            return True
         except OSError:
             # Losing a save is survivable; refusing to reply is not.
             log.exception("could not persist players to %s", self.players_path)
+            return False
 
-        await self._deliver(player, reply, was_fighting, room.room_id)
+    async def _backup_loop(self) -> None:
+        """Snapshot at start-up, then every MATRIX_BACKUP_HOURS."""
+        while True:
+            try:
+                await asyncio.to_thread(snapshot, self.state_dir, self.backup_keep)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("backup stumbled; continuing")
+            await asyncio.sleep(self.backup_hours * 3600)
 
     async def _deliver(self, player: Player, lines: list[str],
                        was_fighting: bool, room_id: str | None = None) -> None:
@@ -547,10 +617,18 @@ class Bot:
             log.info("also answering in %d one-to-one room(s)", len(self.dm_rooms))
 
         ticker = asyncio.create_task(self._travel_ticker())
+        tasks = [ticker]
+        if self.backup_hours > 0:
+            tasks.append(asyncio.create_task(self._backup_loop()))
+            log.info("backing up every %gh, keeping %d", self.backup_hours,
+                     self.backup_keep)
+        if self.admins:
+            log.info("%d operator(s) configured", len(self.admins))
         try:
             await self.client.sync_forever(timeout=30000, since=since)
         finally:
-            ticker.cancel()
+            for task in tasks:
+                task.cancel()
             await self.client.close()
 
 

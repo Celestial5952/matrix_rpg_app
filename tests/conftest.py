@@ -81,3 +81,20 @@ def _instant_pace():
     set_travel_pace(0)
     yield
     set_travel_pace(0)
+
+
+def clear_contract(player: Player, guild=None, quest: str | None = None) -> None:
+    """Play the player's current contract to completion, through the real
+    command path. With `quest`, starts that template instead of board slot 1."""
+    char = player.character
+    if quest is not None:
+        start_run(char, CONTRACTS_BY_KEY[quest])
+    else:
+        handle(player, "!board", None, guild)
+        handle(player, "!accept 1", None, guild)
+    for _ in range(600):
+        if player.character is None or player.character.run is None:
+            return
+        player.character.run.hp = player.character.run.max_hp
+        handle(player, "!1", None, guild)
+    raise AssertionError("contract never finished")

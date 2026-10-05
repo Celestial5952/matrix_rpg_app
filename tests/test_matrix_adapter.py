@@ -410,3 +410,119 @@ def test_an_unknown_style_falls_back_to_post(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("MATRIX_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("MATRIX_COMBAT_STYLE", "interpretive-dance")
     assert Bot().combat_style == "post"
+
+
+# --- operators and backups -------------------------------------------------
+
+@pytest.fixture
+def admin_bot(bot: Bot, monkeypatch) -> Bot:
+    bot.admins = {"@boss:srv"}
+    return bot
+
+
+def bodies(bot: Bot) -> str:
+    return "\n".join(m["body"] for m in bot.client.sent)
+
+
+def test_admins_are_read_from_the_environment(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MATRIX_HOMESERVER", "https://srv")
+    monkeypatch.setenv("MATRIX_USER", "@bot:srv")
+    monkeypatch.setenv("MATRIX_ROOM_ID", ROOM)
+    monkeypatch.setenv("MATRIX_PASSWORD", "x")
+    monkeypatch.setenv("MATRIX_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("MATRIX_ADMINS", " @boss:srv , @two:srv ,, ")
+    assert Bot().admins == {"@boss:srv", "@two:srv"}
+
+
+def test_no_admins_by_default(bot: Bot) -> None:
+    assert bot.admins == set()
+
+
+def test_an_admin_gets_operator_commands(admin_bot: Bot) -> None:
+    enrol(admin_bot, "@boss:srv", "Boss")
+    deliver(admin_bot, "!admin players", sender="@boss:srv")
+    assert "@boss:srv" in bodies(admin_bot)
+
+
+def test_a_non_admin_cannot_use_them(admin_bot: Bot) -> None:
+    enrol(admin_bot, "@player:srv")
+    deliver(admin_bot, "!admin players")
+    assert "I don't know `!admin`" in bodies(admin_bot)
+    deliver(admin_bot, "!admin announce hello everyone")
+    assert "hello everyone" not in bodies(admin_bot)
+
+
+def test_matching_is_on_the_exact_mxid_not_the_display_name(admin_bot: Bot) -> None:
+    """FakeRoom names everybody 'Tester'; a lookalike must not become admin."""
+    enrol(admin_bot, "@bossx:srv")
+    deliver(admin_bot, "!admin players", sender="@bossx:srv")
+    assert "I don't know `!admin`" in bodies(admin_bot)
+
+
+def test_announce_posts_a_notice_to_the_hall(admin_bot: Bot) -> None:
+    deliver(admin_bot, "!admin announce Maintenance at 9pm, Doc!",
+            sender="@boss:srv")
+    sent = [m["body"] for m in admin_bot.client.sent]
+    assert any("Notice from the guild" in b and "Maintenance at 9pm, Doc!" in b
+               for b in sent), "text keeps its case and punctuation"
+    assert any("Posted to the hall" in b for b in sent)
+
+
+def test_announce_needs_text(admin_bot: Bot) -> None:
+    deliver(admin_bot, "!admin announce", sender="@boss:srv")
+    assert "posts a notice" in bodies(admin_bot)
+    assert "Notice from the guild" not in bodies(admin_bot)
+
+
+def test_announce_reaches_the_hall_even_from_a_dm(admin_bot: Bot) -> None:
+    sent_to: list[str] = []
+    original = admin_bot.client.room_send
+
+    async def spy(room_id, message_type, content):
+        sent_to.append(room_id)
+        return await original(room_id, message_type, content)
+
+    admin_bot.client.room_send = spy
+    admin_bot.dm_rooms.add("!dm:srv")
+    asyncio.run(admin_bot.on_message(
+        FakeRoom("!dm:srv"), FakeEvent("@boss:srv", "!admin announce hi")))
+    assert ROOM in sent_to and "!dm:srv" in sent_to
+
+
+def test_admin_backup_snapshots_the_live_state(admin_bot: Bot, tmp_path) -> None:
+    enrol(admin_bot, "@boss:srv", "Boss")
+    admin_bot.client.sent.clear()
+    deliver(admin_bot, "!admin backup", sender="@boss:srv")
+    assert "Snapshot written" in bodies(admin_bot)
+    snaps = list((tmp_path / "backups").iterdir())
+    assert len(snaps) == 1 and (snaps[0] / "players.json").exists()
+
+    admin_bot.client.sent.clear()
+    deliver(admin_bot, "!admin backup", sender="@boss:srv")
+    assert "Nothing new" in bodies(admin_bot)
+
+
+def test_the_backup_loop_snapshots_immediately_and_survives_errors(
+        admin_bot: Bot, tmp_path, monkeypatch) -> None:
+    calls = []
+
+    def flaky(state_dir, keep):
+        calls.append((state_dir, keep))
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(adapter, "snapshot", flaky)
+    admin_bot.backup_hours = 0.00001   # ~36ms
+
+    async def run() -> None:
+        task = asyncio.create_task(admin_bot._backup_loop())
+        await asyncio.sleep(0.2)
+        task.cancel()
+
+    asyncio.run(run())
+    assert len(calls) >= 2, "an exception must not end the loop"
+    assert calls[0] == (tmp_path, admin_bot.backup_keep)
+
+
+def test_backup_settings_have_sane_defaults_and_floors(bot: Bot) -> None:
+    assert bot.backup_hours == 24 and bot.backup_keep == 14
